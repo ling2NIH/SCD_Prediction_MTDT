@@ -165,7 +165,6 @@ class MoleculeDataset(InMemoryDataset):
                 _load_dataset(self.root + "/raw/" + self.dataset + ".json")
             
             for i in range(len(smiles_list)):
-                print(i)
                 rdkit_mol = rdkit_mol_objs[i]
                 data = mol_to_graph_data_obj_simple(rdkit_mol)
                 data['id'] = np.array([i])
@@ -178,7 +177,6 @@ class MoleculeDataset(InMemoryDataset):
                 _load_dataset(self.root + "/raw/" + self.dataset + ".json")
             
             for i in range(len(smiles_list)):
-                print(i)
                 rdkit_mol = rdkit_mol_objs[i]
                 data = mol_to_graph_data_obj_simple(rdkit_mol)
                 data['id'] = np.array([i])
@@ -190,7 +188,6 @@ class MoleculeDataset(InMemoryDataset):
                 _load_dataset(self.root + "/raw/" + self.dataset + ".json")
             
             for i in range(len(smiles_list)):
-                print(i)
                 rdkit_mol = rdkit_mol_objs[i]
                 data = mol_to_graph_data_obj_simple(rdkit_mol)
                 # manually add mol id
