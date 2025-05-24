@@ -1680,9 +1680,9 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
 
 
 if __name__=='__main__':
-    port = int(os.environ.get("PORT", 8050))  # fallback 8050 locally
-    app.run_server(
+    port = int(os.environ.get("PORT", 10000))  
+    app.run(
         host="0.0.0.0",
         port=port,
-        debug=False
+        debug=True
     )
