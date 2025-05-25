@@ -6,7 +6,7 @@ import numpy as np
 import io
 import base64
 import plotly.graph_objects as go
-import pickle
+import dill
 
 import shap_v2
 import paddle
