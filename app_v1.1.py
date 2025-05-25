@@ -1356,8 +1356,8 @@ def predict_flat(X_and_mask):
 
 np.random.seed(42)
 
-with open("./explainer.pkl", "rb") as f:
-    explainer = pickle.load(f)
+with open("./explainer.dill","rb") as f:
+    explainer = dill.load(f)
 
 def get_waterfall_base64(X_and_mask_eval,df_combined_with_mask_eval,index, order=None):
     np.random.seed(42)
