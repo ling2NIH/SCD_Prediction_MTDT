@@ -6,7 +6,7 @@ import numpy as np
 import io
 import base64
 import plotly.graph_objects as go
-
+import pickle
 
 import shap_v2
 import paddle
@@ -1338,10 +1338,9 @@ model.eval()
 
 x_mean = np.load("./x_mean.npy")
 x_std = np.load("./x_std.npy")
-X_and_mask = np.load("./X_and_mask.npy")
 feature_name = np.load("./feature_name.npy", allow_pickle=True)
-X_example = pd.read_csv("./x_df.csv")
-X_example = X_example.iloc[0:3]
+X_example = pd.read_csv("./example_scd_data.csv")
+
 import matplotlib.pyplot as plt
 def predict_flat(X_and_mask):
     X = X_and_mask[:, :68]
@@ -1357,7 +1356,8 @@ def predict_flat(X_and_mask):
 
 np.random.seed(42)
 
-explainer = shap_v2.SamplingExplainer(predict_flat, X_and_mask,algorithm="auto")
+with open("./explainer.pkl", "rb") as f:
+    explainer = pickle.load(f)
 
 def get_waterfall_base64(X_and_mask_eval,df_combined_with_mask_eval,index, order=None):
     np.random.seed(42)
