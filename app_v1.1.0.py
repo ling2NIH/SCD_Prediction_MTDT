@@ -1337,14 +1337,14 @@ model = ModelDeepHit_Multitask(input_dims, network_settings, outcome_configs  , 
 model.set_state_dict(paddle.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/saved_model/model_multitask_deephit_0.9732.pdparams"))
 model.eval()
 
-x_mean = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/x_mean.npy")
-x_std = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/x_std.npy")
-feature_name = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/feature_name.npy", allow_pickle=True)
-X_example = pd.read_csv("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/example_scd_data.csv")
-batch_basis_eval = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/batch_basis_eval.npy")
-mean_list = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/mean_long.npy")
-std_list = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/std_long.npy")
-long_names = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/long_names.npy", allow_pickle=True)
+x_mean = np.load("./x_mean.npy")
+x_std = np.load("./x_std.npy")
+feature_name = np.load("./feature_name.npy", allow_pickle=True)
+X_example = pd.read_csv("./example_scd_data.csv")
+batch_basis_eval = np.load("./batch_basis_eval.npy")
+mean_list = np.load("./mean_long.npy")
+std_list = np.load("./std_long.npy")
+long_names = np.load("./long_names.npy", allow_pickle=True)
 
 import matplotlib.pyplot as plt
 def predict_flat(X_and_mask):
@@ -1849,4 +1849,4 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
 
 
 if __name__=='__main__':
-    app.run(debug=True, host='0.0.0.0', port=8060)
+    app.run(debug=False, host='0.0.0.0', port=8060)
