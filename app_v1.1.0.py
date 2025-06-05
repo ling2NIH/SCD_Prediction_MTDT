@@ -1334,7 +1334,7 @@ network_settings = {
 autoencoder = DTA_AE(hidden_dim1=35, hidden_dim2=28, num_heads=1, num_layers=1)
 
 model = ModelDeepHit_Multitask(input_dims, network_settings, outcome_configs  , autoencoder, log_writer)
-model.set_state_dict(paddle.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/saved_model/model_multitask_deephit_0.9732.pdparams"))
+model.set_state_dict(paddle.load("./model_multitask_deephit_0.9732.pdparams"))
 model.eval()
 
 x_mean = np.load("./x_mean.npy")
