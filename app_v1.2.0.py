@@ -33,7 +33,6 @@ import random
 from paddle.io import DataLoader
 from visualdl import LogWriter
 
-from sklearn.model_selection import KFold, train_test_split
 
 def log(x):
     return paddle.log(x + 1e-08)
@@ -2367,6 +2366,7 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
 
 
 
+if __name__ == '__main__':
+    port = int(os.environ.get('PORT', 10000))  
+    app.run(debug=False, host='0.0.0.0', port=port)
 
-if __name__=='__main__':
-    app.run(debug=True, host='0.0.0.0', port=8060)
