@@ -8,3 +8,4 @@ scikit-learn
 paddlepaddle
 visualdl
 shap
+dill
