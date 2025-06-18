@@ -1475,7 +1475,7 @@ def paddle_manual_conformal_interval(paddle_model, X_calib, y_calib, X_test, alp
     tau = np.ceil((1 - alpha) * (n + 1)) / n
     q = np.quantile(residuals, tau)
     #q = np.quantile(residuals, 1 - alpha)
-
+    
     y_pred_test = model_wraped.predict(X_test)
 
     lower_bound = np.clip(y_pred_test - q, 0, 1)
@@ -2368,5 +2368,5 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 10000))  
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=True, host='0.0.0.0', port=port)
 
