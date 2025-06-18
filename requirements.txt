@@ -1,0 +1,9 @@
+dash
+dash-bootstrap-components
+pandas
+numpy
+plotly
+scipy
+scikit-learn
+paddlepaddle
+visualdl
