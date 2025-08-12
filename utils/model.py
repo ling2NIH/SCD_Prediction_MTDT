@@ -1,38 +1,8 @@
-import dash
-from dash import html, dcc, dash_table, Input, Output, State
-import dash_bootstrap_components as dbc
 import pandas as pd
 import numpy as np
-import io
-import base64
-import plotly.graph_objects as go
-
-
-import shap_v2
 import paddle
 import paddle.nn as nn
 import paddle.nn.functional as F
-import paddle.optimizer as optim
-from paddle.io import DataLoader, TensorDataset, Subset
-
-import numpy as np
-import pandas as pd
-import os
-from paddle.static import InputSpec
-import random
-from paddle.jit import to_static
-from scipy.interpolate import interp1d
-from sklearn.metrics import auc
-from sklearn.metrics import roc_auc_score
-
-import paddle
-import paddle.nn as nn
-import paddle.optimizer as optim
-import random
-from paddle.io import DataLoader
-from visualdl import LogWriter
-
-from sklearn.model_selection import KFold, train_test_split
 
 def log(x):
     return paddle.log(x + 1e-08)
@@ -68,37 +38,6 @@ def overall_cause_specific_c_index(pred, event, time, num_causes_idx):
     
     return c_index
 
-def cause_specific_auc(pred, event, event_time, cause_idx, time_grid):
-    out = pred[:, cause_idx, :].numpy()
-    
-    event_notensor = event.numpy()
-    event_time_notensor = event_time.numpy()
-    
-    auc_scores = []
-    
-    for t in time_grid:
-        # Define event indicator
-        event_indicator_new = ((event_time_notensor <= t) & (event_notensor == 1)).astype(int)
-        
-        # Compute risk score
-        risk_score = np.sum(out[:, :t], axis=1)  # Summing probabilities up to time t
-        
-        # Compute AUC if valid
-        if len(np.unique(event_indicator_new)) > 1:
-            auc_value = roc_auc_score(event_indicator_new, risk_score)
-        else:
-            auc_value = np.nan  # Store NaN if AUC cannot be computed
-        
-        auc_scores.append(auc_value)
-
-    # Convert to numpy array
-    auc_scores = np.array(auc_scores)
-
-    # Compute iAUC only if valid values exist
-    
-    iauc = auc(time_grid, auc_scores) / (time_grid[-1] - time_grid[0])
-
-    return auc_scores, iauc
 
 def cause_specific_intergrated_brier_score(predictions, time_survival, event_type,  num_causes_idx):
     prediction = predictions[:,num_causes_idx,:].numpy()
@@ -123,151 +62,6 @@ def cause_specific_intergrated_brier_score(predictions, time_survival, event_typ
     ibs = np.trapz(brier_scores, time_grid) / (time_grid[-1] - time_grid[0])
     return brier_scores, ibs
 
-
-
-### CENSORING PROBABILITY USING KAPLAN-MEIER ESTIMATE
-def censoring_prob(y, t):
-    """
-    Compute censoring probabilities using Kaplan-Meier estimate.
-    
-    Parameters:
-        y (np.ndarray): Censoring indicator (1 = event, 0 = censored).
-        t (np.ndarray): Observed times.
-
-    Returns:
-        np.ndarray: Censoring probabilities at observed times.
-    """
-    kmf = KaplanMeierFitter()
-    kmf.fit(t, event_observed=(y == 0).astype(int))  # Censoring probability as survival probability of censoring event
-    G = np.asarray(kmf.survival_function_.reset_index()).transpose()
-    G[1, G[1, :] == 0] = G[1, G[1, :] != 0][-1]  # Fill 0 with the last observed value
-    return G
-
-### C(t)-INDEX FOR ALL CAUSES
-def cause_specific_c_index_all(predictions, time_survival, event_type, time, num_causes):
-    """
-    Computes cause-specific C-index for each cause in competing risks.
-
-    Parameters:
-        predictions (np.ndarray): Predicted risk scores for each cause, shape (num_samples, num_causes).
-        time_survival (np.ndarray): Survival or censoring times, shape (num_samples,).
-        event_type (np.ndarray): Event types (1, 2, ..., num_causes; 0 for censored), shape (num_samples,).
-        time (int): Evaluation time horizon for the C-index.
-        num_causes (int): Number of competing events.
-
-    Returns:
-        dict: Cause-specific C-index for each event.
-    """
-    c_index_scores = {}
-    for cause in range(1, num_causes + 1):
-        prediction = np.sum(predictions[:, cause - 1,:time], axis=1)
-        N = len(prediction)
-        A, Q, N_t = np.zeros((N, N)), np.zeros((N, N)), np.zeros((N, N))
-
-        for i in range(N):
-            A[i, np.where(time_survival[i] < time_survival)[0]] = 1
-            Q[i, np.where(prediction[i] > prediction)[0]] = 1
-            if time_survival[i] <= time and event_type[i] == cause:
-                N_t[i, :] = 1
-            #print(f"A: {A}")  # Debug print
-            #print(f"Q: {Q}")  # Debug print
-
-        Num = np.sum(A * N_t * Q)
-        Den = np.sum(A * N_t)
-        c_index_scores[f"Cause_{cause} at horizon_{time}"] = float(Num / Den) if Den != 0 else -1
-    return c_index_scores
-
-### BRIER SCORE FOR ALL CAUSES
-def cause_specific_brier_score_all(predictions, time_survival, event_type, time, num_causes):
-    """
-    Computes cause-specific Brier score for each cause in competing risks.
-
-    Parameters:
-        predictions (np.ndarray): Predicted risk scores for each cause, shape (num_samples, num_causes, num_time_steps).
-        time_survival (np.ndarray): Survival or censoring times, shape (num_samples,).
-        event_type (np.ndarray): Event types (1, 2, ..., num_causes; 0 for censored), shape (num_samples,).
-        time (int): Evaluation time horizon for the Brier score.
-        num_causes (int): Number of competing events.
-
-    Returns:
-        dict: Cause-specific Brier score for each event.
-    """
-    brier_scores = {}
-    for cause in range(1, num_causes + 1):
-        pred_e = np.sum(predictions[:, cause - 1, :time], axis=1)
-        y_true = ((time_survival <= time) & (event_type == cause)).astype(float)
-        #print(f"y_true: {y_true}")  # Debug print
-        brier_scores[f"Cause_{cause} at horizon_{time}"] = np.mean(np.array((pred_e - y_true) ** 2))
-    return brier_scores
-
-
-def weighted_cause_specific_c_index_all(t_train, y_train, predictions, t_test, y_test, time, num_causes):
-    """
-    Computes weighted cause-specific C-index for each cause in competing risks.
-    """
-    weighted_c_index_scores = {}
-    G = censoring_prob(y_train, t_train)  # censoring probabilities from training data
-    N = len(t_test)
-
-    for cause in range(1, num_causes + 1):
-        prediction = np.sum(predictions[:, cause - 1, :time], axis =1) # predictions for this cause at the time horizon
-        A, Q, N_t = np.zeros((N, N)), np.zeros((N, N)), np.zeros((N, N))
-
-        for i in range(N):
-            tmp_idx = np.where(G[0, :] >= t_test[i])[0]
-            W = (1.0 / G[1, -1]) ** 2 if len(tmp_idx) == 0 else (1.0 / G[1, tmp_idx[0]]) ** 2
-
-            # Assign weights element-wise using multiplication for broadcasting
-            A[i] = (t_test[i] < t_test) * W  # Boolean mask * W to assign correct weights
-            Q[i] = (prediction[i] > prediction).astype(float)  # Boolean mask for ranking
-
-            # Check if event occurred for this cause within the time horizon
-            if t_test[i] <= time and y_test[i] == cause:
-                N_t[i, :] = 1.0
-
-        Num = np.sum(A * N_t * Q)
-        Den = np.sum(A * N_t)
-        weighted_c_index_scores[f"Cause_{cause} at horizon_{time}"] = float(Num / Den) if Den != 0 else -1
-
-    return weighted_c_index_scores
-
-
-
-### WEIGHTED BRIER SCORE FOR ALL CAUSES
-def weighted_cause_specific_brier_score_all(t_train, y_train, predictions, t_test, y_test, time, num_causes):
-    """
-    Computes weighted cause-specific Brier score for each cause in competing risks.
-
-    Parameters:
-        t_train, y_train : Training set times and censoring indicators.
-        predictions      : Risk scores for test set for each cause, shape (num_samples, num_causes).
-        t_test, y_test   : Test set times and censoring indicators.
-        time             : Evaluation time horizon for Brier score.
-        num_causes       : Number of competing events.
-
-    Returns:
-        dict: Weighted cause-specific Brier score for each event.
-    """
-    weighted_brier_scores = {}
-    G = censoring_prob(y_train, t_train)
-    N = len(t_test)
-
-    for cause in range(1, num_causes + 1):
-        pred_e = np.sum(predictions[:, cause - 1,:time], axis=1)
-        W = np.zeros(N)
-        Y_tilde = (t_test > time).astype(float)
-
-        for i in range(N):
-            tmp_idx1 = np.where(G[0, :] >= t_test[i])[0]
-            tmp_idx2 = np.where(G[0, :] >= time)[0]
-
-            G1 = G[1, -1] if len(tmp_idx1) == 0 else G[1, tmp_idx1[0]]
-            G2 = G[1, -1] if len(tmp_idx2) == 0 else G[1, tmp_idx2[0]]
-            W[i] = (1.0 - Y_tilde[i]) * float(y_test[i] == cause) / G1 + Y_tilde[i] / G2
-
-        y_true = ((t_test <= time) & (y_test == cause)).astype(float)
-        weighted_brier_scores[f"Cause_{cause} at horizon_{time}"] = np.mean(np.array(W * (Y_tilde - (1.0 - pred_e)) ** 2))
-    return weighted_brier_scores
 
 def f_get_Normalization(X, norm_mode):
     num_Patient, num_Feature = np.shape(X)
@@ -304,7 +98,7 @@ def f_get_fc_mask2(time, label, num_Event, num_Category):
             time_idx = min(int(time[i,0]-1), num_Category - 1)
             mask[i,int(label[i,0]-1),time_idx] = 1
         else: #label[i,2]==0: censored
-            time_idx = min(int(time[i,0]), num_Category)
+            time_idx = min(int(time[i,0]-1), num_Category)
             mask[i,:,time_idx:] =  1 #fill 1 until from the censoring time (to get 1 - \sum F)
     return mask
 
@@ -331,92 +125,8 @@ def f_get_fc_mask3(time, meas_time, num_Category):
             mask[i,:t] = 1  #this excludes the last measurement time and includes the event time
     return mask
 
-def import_dataset_SDC_sim_outcome(norm_mode='standard'):
-    df_with_miss = pd.read_pickle('/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/SCD/df_baseline_outcomes_io_na_nomiss30.pkl')
-    df_baseline_with_miss = df_with_miss.drop(columns=['alanine aminotransferase','alkaline phosphatase','bilirubin, direct','creatinine','urea nitrogen','IVS_with_t','TPV_with_t','RAA_with_t','HR_with_t','BMI_with_t','ProBNP_with_t','eGFR_AA_with_t','eGFR_NAA_with_t'])
-    df_long_for_pred = df_with_miss[['alanine aminotransferase','alkaline phosphatase','bilirubin, direct','creatinine','urea nitrogen','IVS_with_t','TPV_with_t','RAA_with_t','HR_with_t','BMI_with_t','ProBNP_with_t','eGFR_AA_with_t','eGFR_NAA_with_t']]
-    df_baseline_imputed = pd.read_pickle('/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/SCD/df_imputed_baseline_v2.pkl')
-    df_numerical = df_baseline_imputed.drop(columns=['MRN','Echo.date.and.time','Event_time', 'Event_status','Male','Genotype','Ethnic_group'])
-    df_numerical_scaled = f_get_Normalization(np.array(df_numerical), norm_mode)
-    df_categorical = df_baseline_imputed[['Male','Genotype','Ethnic_group']]
-    data = np.concatenate((df_numerical_scaled, df_categorical), axis=1)
-
-    label = np.asarray(df_baseline_imputed[['Event_status']])
-    time = np.asarray(df_baseline_imputed[['Event_time']])/365.25
-    time = np.ceil(time)
-    # time >=15, set to 16
-    time[time >= 15] = 16
-
-    num_Category = int(np.max(time))
-    num_Event       = int(len(np.unique(label)) - 1) 
-
-    mask1           = f_get_fc_mask2(time, label, num_Event, num_Category)
-    mask2           = f_get_fc_mask3(time, -1, num_Category)
-    
-    df_numerical_miss = df_baseline_with_miss.drop(columns=['MRN','Echo.date.and.time','Event_time', 'Event_status','Male','Genotype','Ethnic_group'])
-
-    df_categorical_miss = df_baseline_with_miss[['Male','Genotype','Ethnic_group']]
-    data_miss = np.concatenate((df_numerical_miss, df_categorical_miss), axis=1)
-
-    mask_miss = ~np.isnan(data_miss)
-    outcome_matrix_pred = np.array(df_long_for_pred.to_numpy().tolist()).astype(np.float64) 
-    mask_miss_pred = ~np.isnan(outcome_matrix_pred)
-    
-
-    outcome_matrix_scaled = outcome_matrix_pred.copy()
-
-    for i in range(outcome_matrix_pred.shape[1]):  
-        x = outcome_matrix_pred[:, i, :, 0] 
-        mean = np.nanmean(x)  
-        std = np.nanstd(x)
-
-        outcome_matrix_scaled[:, i, :, 0] = (x - mean) / (std + 1e-8) 
-
-    from scipy.interpolate import BSpline
-
-    outcome_matrix_scaled = np.nan_to_num(outcome_matrix_scaled, nan=0.0)
-    x = outcome_matrix_scaled[:,:,:,1]
-    batch_size, covariate_dim, t_dim = x.shape
-    k = 2  
-    num_internal_knots = 2
-
-
-    internal_knots = np.linspace(0, 3, num_internal_knots + 2)[1:-1] 
-    t_knots = np.concatenate((
-        np.repeat(0, k+1),
-        internal_knots,
-        np.repeat(3, k+1)
-    ))
-
-    num_basis = len(t_knots) - (k + 1)  # number of basis functions
-    c = np.eye(num_basis)  # identity matrix for basis
-
-    b_spline_basis = [BSpline(t_knots, c[i], k) for i in range(num_basis)]
-
-    batch_basis = []
-
-    for b in range(batch_size):
-        x_temp = x[b]  # (Covariate_dim, x_dim)
-
-        basis_values_covariates = []
-        for j in range(covariate_dim):
-            t_input = x_temp[j]  # (x_dim,)
-
-            # apply each basis
-            basis_eval = np.stack([basis(t_input) for basis in b_spline_basis], axis=0)  # (num_basis, x_dim)
-            basis_values_covariates.append(basis_eval)
-
-        basis_values_covariates = np.stack(basis_values_covariates, axis=0)  # (Covariate_dim, num_basis, x_dim)
-        batch_basis.append(basis_values_covariates)
-
-
-    batch_basis = np.stack(batch_basis, axis=0)  # (batch_size, Covariate_dim, num_basis, x_dim)    
-    return data.astype('float32'), label.astype('float32'), time.astype('float32'), mask1.astype('float32'), mask2.astype('float32'), num_Category, num_Event, mask_miss.astype('float32'),outcome_matrix_scaled.astype('float32'), mask_miss_pred.astype('float32'), batch_basis.astype('float32')
-
-from visualdl import LogWriter
-
 class ModelDeepHit_Multitask(nn.Layer):
-    def __init__(self, input_dims, network_settings, outcome_configs, autoencoder, log_writer):
+    def __init__(self, input_dims, network_settings, outcome_configs, autoencoder, log_writer=None):
         super(ModelDeepHit_Multitask, self).__init__()
         
         # Define input dimensions and network settings
@@ -429,6 +139,8 @@ class ModelDeepHit_Multitask(nn.Layer):
         self.num_layers_CS = network_settings['num_layers_CS']
         self.active_fn = network_settings['active_fn']
         self.keep_prob = network_settings['keep_prob']
+
+
         
 
         self.initial_W = paddle.nn.initializer.XavierUniform()
@@ -490,10 +202,10 @@ class ModelDeepHit_Multitask(nn.Layer):
                              #self.ae_out_dim, self.active_fn, self.initial_W, keep_prob=1)
     
     #@paddle.jit.to_static(input_spec=[paddle.static.InputSpec(shape=[None, input_dims['x_dim']], dtype='float32')])
-    def forward(self, x):
+    def forward(self, x, mask):
         # Autoencoder
 
-        ae_out, _= self.autoencoder(x, mask = self.mask)
+        ae_out, _= self.autoencoder(x, mask = mask)
         
         ae_out = self.linear_layer(ae_out)  # (batch_size, input_dim, 1)
         ae_out = ae_out.squeeze(-1)  # (batch_size, input_dim)
@@ -558,8 +270,7 @@ class ModelDeepHit_Multitask(nn.Layer):
 
         # Multitask losses
         outcome_losses = []
-        loss_weights = []
-        
+
         for i, config in enumerate(outcome_configs):
             task_type = config["task_type"]
 
@@ -588,9 +299,10 @@ class ModelDeepHit_Multitask(nn.Layer):
                 loss = F.cross_entropy(pred_values, true_values.astype('int64'))
             
             elif task_type == "longitudinal_regression":
+
                 # Longitudinal regression loss (MSE)
                 #outcomes_true = paddle.where(paddle.isnan(outcomes_true), paddle.zeros_like(outcomes_true), outcomes_true)
-                loss = self.mse_longitudinal(outcomes_true[:,i,:,0], outcome_preds[i], missing_mask[:,i,:,0], basis[:,i,:,:])
+                loss = self.mse_longitudinal(outcomes_true[:,i,:,:], outcome_preds[i], missing_mask[:,i,:,0],basis[:,i,:,:])
                 #mask_indices = paddle.nonzero(missing_mask[:, :, i]).squeeze()
                 #true_values = outcomes_true[:,:, i].index_select(mask_indices)
                 #pred_values = outcome_preds[i].index_select(mask_indices)
@@ -602,15 +314,11 @@ class ModelDeepHit_Multitask(nn.Layer):
 
             outcome_losses.append(loss)
 
-            # Compute weight for the current task (inverse of the loss or constant weight)
-            loss_weights.append(1.0)
 
-        # Convert weights list to a Paddle tensor
-        loss_weights = paddle.to_tensor(loss_weights, dtype='float32')
 
         # Compute the combined multitask loss as the weighted sum of individual losses
         multitask_loss = paddle.sum(
-            paddle.stack([w * l for w, l in zip(loss_weights, outcome_losses)])
+            paddle.stack([w * l for w, l in zip(delta, outcome_losses)])
         )
 
         # Total loss
@@ -618,7 +326,7 @@ class ModelDeepHit_Multitask(nn.Layer):
         #print(regularization_loss)
         #print(f"survival_loss: {survival_loss}, multitask_loss: {multitask_loss}, regularization_loss: {regularization_loss}")
 
-        loss_total = survival_loss + delta * multitask_loss + eta* regularization_loss 
+        loss_total = survival_loss + multitask_loss + eta* regularization_loss 
 
         return loss_total
     
@@ -709,14 +417,18 @@ class ModelDeepHit_Multitask(nn.Layer):
         return loss_3    
 
     def mse_longitudinal(self, outcome_true, outcome_pred, missing_mask_fp, basis):
+        outcome_true_time = outcome_true[:, :, 1]  # Extract time points shape (batch_size, t_dim)
+        outcome_true_values = outcome_true[:, :, 0]  # Extract outcome values shape (batch_size, t_dim)
+        outcome_true_values = paddle.where(paddle.isnan(outcome_true_values), paddle.zeros_like(outcome_true_values), outcome_true_values)
+        outcome_true_time = paddle.where(paddle.isnan(outcome_true_time), paddle.zeros_like(outcome_true_time), outcome_true_time)
 
-        outcome_true = paddle.where(paddle.isnan(outcome_true), paddle.zeros_like(outcome_true), outcome_true)
+        outcome_pred = outcome_pred.unsqueeze(1)  # (batch_size, 1, b_dim)
+        time_aware_weight = 0.5**outcome_true_time  # (batch_size, t_dim)
 
-
-        outcome_pred = outcome_pred.unsqueeze(1)  # (batch_size, 1, x_dim)
-        curve_prediction = paddle.matmul(outcome_pred, basis) # (batch_size,1, x_dim)
-        curve_prediction = paddle.squeeze(curve_prediction, axis=1)  # (batch_size, x_dim)
-        loss_elementwise = (outcome_true-curve_prediction)**2
+        curve_prediction = paddle.matmul(outcome_pred, basis) # (batch_size,1, t_dim)
+        #print(f"curve_prediction shape after matmul: {curve_prediction.shape}")  # Debug print
+        curve_prediction = paddle.squeeze(curve_prediction, axis=1)  # (batch_size, t_dim)
+        loss_elementwise = time_aware_weight*(outcome_true_values-curve_prediction)**2
         masked_loss = (loss_elementwise * missing_mask_fp).sum() / missing_mask_fp.sum()
         
         return masked_loss
@@ -734,7 +446,7 @@ class ModelDeepHit_Multitask(nn.Layer):
         self.best_multitask_metrics = float('-inf')
         patience_counter = 0
         self.best_model_state = None
-        best_model_path = "./saved_model/best_model_training_multi_long_v2.11_SCD_2.pdparams"
+        best_model_path = "./saved_model/best_model_training_multi_long_v2.14_SCD_2.pdparams"
 
         for epoch in range(epochs):
             # Training phase
@@ -749,13 +461,14 @@ class ModelDeepHit_Multitask(nn.Layer):
             
             for batch_idx, (x_mb, k_mb, t_mb, m1_mb, m2_mb, outcomes_true, missing_mask, missing_mask_fp, basis_mb) in enumerate(train_loader):
                 optimizer.clear_grad()
-                self.mask = missing_mask
+                #self.mask = missing_mask
                 x_mb = paddle.where(paddle.isnan(x_mb), paddle.zeros_like(x_mb), x_mb)
+
                 # Forward pass
-                cause_out, outcome_preds = self.forward(x_mb)
+                cause_out, outcome_preds = self.forward(x_mb,missing_mask)
 
                 # Compute the total loss (survival + multitask)
-                loss = self.compute_loss(k_mb, t_mb, m1_mb, m2_mb, alpha, beta, gamma, delta, eta,outcomes_true, outcome_preds, outcome_configs, missing_mask_fp, basis_mb)
+                loss = self.compute_loss(k_mb, t_mb, m1_mb, m2_mb, alpha, beta, gamma, delta, eta,outcomes_true, outcome_preds, outcome_configs, missing_mask_fp,basis_mb)
 
                 # Backward pass and optimization
                 loss.backward()
@@ -796,10 +509,12 @@ class ModelDeepHit_Multitask(nn.Layer):
                     ) if config["task_type"] == "regression" else
 
                     # Longitudinal regression loss with missing mask
-                    self.mse_longitudinal(outcomes_true[:,i,:,0], outcome_preds[i], missing_mask_fp[:,i,:,0], basis_mb[:,i,:,:])
+                    self.mse_longitudinal( outcomes_true[:,i,:,:], outcome_preds[i], missing_mask_fp[:,i,:,0],basis_mb[:,i,:,:])
+
                     for i, config in enumerate(outcome_configs)
                 ]))
-                
+
+
                 total_survival_loss += survival_loss.item()
                 total_nll_loss += nll.item()
                 total_ranking_loss += ranking.item()
@@ -818,13 +533,14 @@ class ModelDeepHit_Multitask(nn.Layer):
             
 
             # Log training metrics for the epoch
-            self.log_writer.add_scalar(tag="Train/Total_Loss", step=epoch, value=avg_loss)
-            self.log_writer.add_scalar(tag="Train/Survival_Loss", step=epoch, value=avg_survival_loss)
-            self.log_writer.add_scalar(tag="Train/Multitask_Loss", step=epoch, value=avg_multitask_loss)
-            self.log_writer.add_scalar(tag="Train/NLL_Loss", step=epoch, value=avg_nll_loss)
-            self.log_writer.add_scalar(tag="Train/Ranking_Loss", step=epoch, value=avg_ranking_loss)
-            self.log_writer.add_scalar(tag="Train/Calibration_Loss", step=epoch, value=avg_calibration_loss)
-            self.log_writer.add_scalar(tag="Train/Regularization_Loss", step=epoch, value=avg_regularization_loss)
+            if self.log_writer is not None:
+                self.log_writer.add_scalar(tag="Train/Total_Loss", step=epoch, value=avg_loss)
+                self.log_writer.add_scalar(tag="Train/Survival_Loss", step=epoch, value=avg_survival_loss)
+                self.log_writer.add_scalar(tag="Train/Multitask_Loss", step=epoch, value=avg_multitask_loss)
+                self.log_writer.add_scalar(tag="Train/NLL_Loss", step=epoch, value=avg_nll_loss)
+                self.log_writer.add_scalar(tag="Train/Ranking_Loss", step=epoch, value=avg_ranking_loss)
+                self.log_writer.add_scalar(tag="Train/Calibration_Loss", step=epoch, value=avg_calibration_loss)
+                self.log_writer.add_scalar(tag="Train/Regularization_Loss", step=epoch, value=avg_regularization_loss)
             
             print(f"Epoch [{epoch+1}/{epochs}] - Loss: {avg_loss:.4f}, Regularization:{avg_regularization_loss:.4f} ,Survival Loss: {avg_survival_loss:.4f}, NLL: {avg_nll_loss:.4f}, Ranking: {avg_ranking_loss:.4f}, Calibration: {avg_calibration_loss:.4f}, Multitask: {avg_multitask_loss:.4f}")
 
@@ -835,11 +551,12 @@ class ModelDeepHit_Multitask(nn.Layer):
                 multitask_metrics = self.multitask_metrics
 
                 # Log validation metrics
-                self.log_writer.add_scalar(tag="Validation/C-Index", step=epoch, value=surv_metrics[0])
-                self.log_writer.add_scalar(tag="Validation/I_Brier_Score", step=epoch, value=surv_metrics[1])
+                if self.log_writer is not None:
+                    self.log_writer.add_scalar(tag="Validation/C-Index", step=epoch, value=surv_metrics[0])
+                    self.log_writer.add_scalar(tag="Validation/I_Brier_Score", step=epoch, value=surv_metrics[1])
                 
-                for i, metric in enumerate(multitask_metrics):
-                    self.log_writer.add_scalar(tag=f"Validation/Multitask_{i}_Metric", step=epoch, value=metric)
+                    for i, metric in enumerate(multitask_metrics):
+                        self.log_writer.add_scalar(tag=f"Validation/Multitask_{i}_Metric", step=epoch, value=metric)
 
                 print(f"Validation C-index Scores: {surv_metrics[0]}, I Brier Scores: {surv_metrics[1]}, Multitask Metrics: {multitask_metrics}")
 
@@ -851,7 +568,9 @@ class ModelDeepHit_Multitask(nn.Layer):
                         weighted_metric += weight * task_metrics
                 else:
                     weighted_metric = surv_metrics[0]  # Default to C-index
-                self.log_writer.add_scalar(tag="Validation/Weighted_Metric", step=epoch, value=weighted_metric)
+                
+                if self.log_writer is not None:
+                    self.log_writer.add_scalar(tag="Validation/Weighted_Metric", step=epoch, value=weighted_metric)
 
                 if weighted_metric > self.best_weighted_metric + min_delta:
                     self.best_weighted_metric = weighted_metric
@@ -881,9 +600,13 @@ class ModelDeepHit_Multitask(nn.Layer):
             missing_mask_val = val_loader.dataset[:][6]
             missing_mask_fp_val = val_loader.dataset[:][7]
             basis_val = val_loader.dataset[:][8]
-            self.mask = missing_mask_val
+            #self.mask = missing_mask_val
+            #x_for_long_val = x_val[:, self.indices_long_in_x]  # Extract features for longitudinal outcomes
+            #missing_mask_x_val = missing_mask_val[:, self.indices_long_in_x]  # Extract missing mask for longitudinal outcomes
+        
+
             # Compute predictions
-            cause_out_val, outcome_preds_val= self.forward(x_val)
+            cause_out_val, outcome_preds_val= self.forward(x_val,missing_mask_val)
 
             # Compute validation metrics
             c_index_scores = overall_cause_specific_c_index(cause_out_val, k_val.flatten(),t_val.flatten(), num_causes_idx=0)
@@ -914,7 +637,7 @@ class ModelDeepHit_Multitask(nn.Layer):
                 if config["task_type"] == "multiclass_classification" else
 
                 # Longitudinal regression metric: Mean Squared Error
-                self.mse_longitudinal(outcomes_val[:,i,:,0], outcome_preds_val[i], missing_mask_fp_val[:,i,:,0], basis_val[:,i,:,:]).item()
+                self.mse_longitudinal( outcomes_val[:,i,:,:], outcome_preds_val[i], missing_mask_fp_val[:,i,:,0],basis_val[:,i,:,:]).item()
                 for i, config in enumerate(outcome_configs)
             ]
 
@@ -924,9 +647,9 @@ class ModelDeepHit_Multitask(nn.Layer):
 
     def predict(self, x, mask):
         self.eval()
-        self.mask = mask
+        #self.mask = mask
         with paddle.no_grad():
-            cause_out, outcome_preds = self.forward(x)
+            cause_out, outcome_preds = self.forward(x,mask)
         return cause_out, outcome_preds
 
 def create_fc_net(input_dim, num_layers, h_dim, h_fn, o_dim, o_fn, w_init=None, keep_prob=1.0, w_reg=None, use_resnet=False):
@@ -1123,7 +846,7 @@ class MultiHeadSelfAttention(nn.Layer):
     def forward(self, x, mask=None):
         """ x: (batch_size, T, feature_dim) """
         batch_size, input_dim, feature_dim = x.shape
-        self.mask = mask # (batch_size, input_dim)
+        #self.mask = mask # (batch_size, input_dim)
 
         
         Q = self.query_proj(x)  # (batch_size, input_dim, feature_dim)
@@ -1135,11 +858,11 @@ class MultiHeadSelfAttention(nn.Layer):
         V = V.reshape([batch_size, input_dim, self.num_heads, self.head_dim]).transpose([0, 2, 1, 3])
         #fake_V = paddle.ones([batch_size, self.num_heads, input_dim, self.head_dim], dtype='float32')
         attention_scores = paddle.matmul(Q, K, transpose_y=True) / (self.head_dim ** 0.5)  # (batch_size, num_heads, input_dim, input_dim)
-        if self.mask is not None:
+        if mask is not None:
             #missing_mask_attention = paddle.mean(self.mask, axis=-1, keepdim=True)  # (batch_size, T, 1)
-            missing_mask_attention = self.mask.unsqueeze(1).unsqueeze(2)  # (batch, 1, 1, input_dim)
+            missing_mask_attention = mask.unsqueeze(1).unsqueeze(2)  # (batch, 1, 1, input_dim)
 
-            missing_mask_attention = missing_mask_attention.tile([1, self.num_heads, self.mask.shape[1], 1])  # (batch, num_heads, input_dim, input_dim)
+            missing_mask_attention = missing_mask_attention.tile([1, self.num_heads, mask.shape[1], 1])  # (batch, num_heads, input_dim, input_dim)
             #penalty_strength = 1 - F.sigmoid((missing_mask_attention - 0.5) * 10)
             #penalty_factor = -1e4
             attention_scores = paddle.where(missing_mask_attention == 1, attention_scores, paddle.full_like(attention_scores, -1e9))  # (batch_size, num_heads, input_dim, input_dim)
@@ -1265,422 +988,12 @@ class DTA_AE(nn.Layer):
             if total_loss < best_loss:
                 best_loss = total_loss
                 patience_count = 0
-                paddle.save(self.state_dict(), './saved_model/autoencoder_v2.11_temp_2.pdparams')
+                paddle.save(self.state_dict(), './saved_model/autoencoder_v2.13_temp_2.pdparams')
                 print(f"Model saved at epoch {epoch + 1}")
             else:
                 patience_count += 1
                 if patience_count == patience:
-                    state = paddle.load('./saved_model/autoencoder_v2.11_temp_2.pdparams')
+                    state = paddle.load('./saved_model/autoencoder_v2.13_temp_2.pdparams')
                     self.set_state_dict(state)
                     print(f"Early stopping at epoch {epoch + 1}, the best loss is {best_loss:.6f}, best model has been loaded.")
                     break
-
-# Load the trained model
-log_writer = LogWriter(logdir="./logs_app")
-
-input_dims = {
-    'x_dim': 68,         # x_dim
-    'num_Event': 1, # num_events
-    'num_Category': 16 # num_categories (Time horizon for survival time)
-}
-
-weights_on_metric = [50,-100,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01,-0.01]
-
-outcome_configs = [
-    #{"output_dim": 1, "output_activation": None, "task_type": "regression"},  # Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    {"output_dim": 5, "output_activation": None, "task_type": "longitudinal_regression"}, # Longitudinal Regression task
-    #{"output_dim": 10, "output_activation": None, "task_type": "longitudinal_regression", "basis": basis_tensor, "t_index_fp": t_index_fp_tensor}, # Longitudinal Regression task
-    #{"output_dim": 10, "output_activation": None, "task_type": "longitudinal_regression", "basis": basis_tensor, "t_index_fp": t_index_fp_tensor}, # Longitudinal Regression task
-    #{"output_dim": 10, "output_activation": None, "task_type": "longitudinal_regression", "basis": basis_tensor, "t_index_fp": t_index_fp_tensor} 
-    #{"output_dim": 3, "output_activation": "softmax", "task_type": "multiclass_classification"}  # Multi-class classification task
-]
-h_dim_shared= 61
-
-h_dim_CS= 55
-
-num_layers_shared= 2
-
-num_layers_CS= 2
-
-learning_rate= 0.006874616232622134
-
-keep_prob= 0.5854197345129215
-
-active_fn= 'relu'
-
-network_settings = {
-    'h_dim_shared': h_dim_shared,
-    'h_dim_CS': h_dim_CS,
-    'num_layers_shared': num_layers_shared,
-    'num_layers_CS': num_layers_CS,
-    'active_fn': active_fn,
-    'keep_prob': keep_prob,
-    'initial_W': paddle.nn.initializer.XavierUniform(),
-    'ae_out_dim': 28
-}
-autoencoder = DTA_AE(hidden_dim1=35, hidden_dim2=28, num_heads=1, num_layers=1)
-
-model = ModelDeepHit_Multitask(input_dims, network_settings, outcome_configs  , autoencoder, log_writer)
-model.set_state_dict(paddle.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/saved_model/model_multitask_deephit_0.9732.pdparams"))
-model.eval()
-
-x_mean = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/x_mean.npy")
-x_std = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/x_std.npy")
-feature_name = np.load("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/feature_name.npy", allow_pickle=True)
-X_example = pd.read_csv("/scratch/ling2/FSL-Mate/PaddleFSL/examples/molecular_property_prediction/app/example_scd_data.csv")
-
-import matplotlib.pyplot as plt
-def predict_flat(X_and_mask):
-    X = X_and_mask[:, :68]
-    mask = X_and_mask[:, 68:]
-    X_tensor = paddle.to_tensor(X, dtype='float32')
-    mask_tensor = paddle.to_tensor(mask, dtype='float32')
-
-    survival_pred,_ = model.predict(X_tensor, mask_tensor)
-    survival_pred = survival_pred[:, 0, :]
-    survival_pred = survival_pred.numpy()
-
-    return np.sum(survival_pred[:, 0:5], axis=1)
-
-np.random.seed(42)
-
-import dill
-
-with open("./explainer.dill","rb") as f:
-    explainer = dill.load(f)
-
-def get_waterfall_base64(X_and_mask_eval,df_combined_with_mask_eval,index, order=None):
-    np.random.seed(42)
-    shap_values_eval = explainer(X_and_mask_eval[index])
-    shap_values_exp_eval = shap_v2.Explanation(
-        values=shap_values_eval*100,
-        base_values=explainer.expected_value*100,
-        data=df_combined_with_mask_eval.iloc[index],
-        feature_names=feature_name
-    )
-
-    shap_values_exp_eval.data = df_combined_with_mask_eval.loc[index]
-    expl = shap_values_exp_eval
-    current_order = np.argsort(-np.abs(shap_values_eval.values))
-
-    fig = shap_v2.plots.waterfall_v2(expl, max_display=10, show=False,xlim=(-50,150), order=order)
-    buf = io.BytesIO()
-    plt.gcf().set_size_inches(10,3)
-    plt.savefig(buf, format="png", bbox_inches="tight")
-    plt.close()
-    buf.seek(0)
-    encoded = base64.b64encode(buf.read()).decode()
-    return f"data:image/png;base64,{encoded}", current_order
-
-# Initialize Dash app
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY], suppress_callback_exceptions=True)
-app.title = "Sickle Cell Disease Mortality Prediction"
-
-# Layout: UI improvements only
-app.layout = dbc.Container(fluid=True, children=[
-    # Hidden stores
-    dcc.Store(id='memory-predictions'),
-    dcc.Store(id='current-patient-index'),
-    dcc.Store(id='edited-row'),
-    dcc.Store(id='current-order'),
-
-    # Header
-    dbc.Row(dbc.Col(html.H2("Sickle Cell Disease Mortality Prediction", className="text-center text-primary my-4"))),
-
-    # Main content
-    dbc.Row([
-        # Sidebar: upload and instructions
-        dbc.Col([
-            dbc.Card([
-                dbc.CardHeader(html.H5("Upload Data", className="mb-0")),
-                dbc.CardBody([
-                    dbc.Button(
-                        "Download Example Rows",
-                        id="btn-download-example",
-                        color="secondary",
-                        className="w-100 mb-3"
-                    ),
-                    dcc.Download(id="download-example-csv"),
-                    dcc.Upload(
-                        id='upload-data',
-                        children=html.Div(['Click to upload patients CSV']),
-                        style={
-                            'width': '100%', 'height': '80px', 'lineHeight': '80px',
-                            'borderWidth': '2px', 'borderStyle': 'dashed', 'borderRadius': '5px',
-                            'textAlign': 'center', 'backgroundColor': '#f8f9fa'
-                        },
-                        multiple=False
-                    ),
-                    html.Div("Accepted CSV must have exactly 68 numeric columns.", className="text-muted mt-2")
-                ])
-            ], className="shadow-sm mb-4"),
-
-            dbc.Card([
-                dbc.CardHeader(html.H5("Instructions", className="mb-0")),
-                dbc.CardBody([
-                    html.P("1. Click 'Download Example Rows' to get a sample CSV format."),
-                    html.P("2. Upload a CSV file with 68 numeric columns representing patient data."),
-                    html.P("3. View predictions and SHAP analysis after uploading data."),
-                    html.P("4. Click on a row in the predictions table to view individual mortality plot and important baseline variables.")
-                ])
-            ], className="shadow-sm mb-4")
-        ], width=3),
-
-        # Main panel: tables and plots
-        dbc.Col(
-            dbc.Card([
-                dbc.CardHeader(html.H5("Results", className="mb-0")),
-                dbc.CardBody([
-                    # Predictions table and plot
-                    dcc.Loading(
-                        id='loading-table',
-                        type='circle',
-                        children=html.Div(id='output', className="mt-3")
-                    ),
-                    dcc.Loading(
-                        id='loading-mortality',
-                        type='circle',
-                        children=dcc.Graph(id='mortality-plot', config={'displayModeBar': False})
-                    ),
-
-                    html.Hr(),
-                    # SHAP analysis
-                    dcc.Loading(
-                        id='loading-shap',
-                        type='circle',
-                        children=html.Div(id='shap-plot')
-                    ),
-                    html.Br(),
-                    html.Div(id='feature-editor'),
-                    dbc.Button("Update SHAP", id='update-shap-button', color="primary", className="mt-2"),
-                    dcc.Loading(
-                        id='loading-update',
-                        type='circle',
-                        children=html.Div(id='shap-plot-updated', className="mt-3")
-                    )
-                ])
-            ], className="shadow-sm"), width=9
-        )
-    ]),
-
-    # Footer
-    dbc.Row(dbc.Col(html.Footer(            [
-                "Model powered by Multi-Task Deephit",
-                html.Br(),
-                "App designed by Gefei Lin",
-                html.Br(),
-                "Version 1.0.0"
-            ], className="text-center text-muted mt-4")))
-            
-])
-
-@app.callback(
-    Output("download-example-csv", "data"),
-    Input("btn-download-example", "n_clicks"),
-    prevent_initial_call=True
-)
-def download_example(n_clicks):
-
-    return dcc.send_data_frame(
-        X_example.to_csv,
-        "example_scd_data.csv",
-        index=False
-    )
-
-@app.callback(
-    Output('output', 'children'),
-    Output('memory-predictions', 'data'),
-    Input('upload-data', 'contents'),
-    State('upload-data', 'filename')
-)
-def predict(contents, filename):
-    if contents is None:
-        return html.Div("Please upload a CSV file."), dash.no_update
-
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
-    # round all values to 5 decimal places
-    
-
-    if df.shape[1] != 68:
-        return html.Div("Please make sure the CSV contains exactly 68 column of numeric values.")
-
-    mask = ~np.isnan(df)
-    df_scaled = (df - x_mean) / x_std
-    df_scaled = df_scaled.fillna(0)
-
-    mask_tensor = paddle.to_tensor(mask.to_numpy().astype('float32'))
-    input_tensor = paddle.to_tensor(df_scaled.values.astype('float32'))
-    predictions, _ = model.predict(input_tensor, mask_tensor)
-    predictions = predictions[:, 0, :].numpy()
-    mortality = np.cumsum(predictions, axis=1)
-    mortality[:, -1] = 1
-
-    pred_df = pd.DataFrame(mortality, columns=[f"{i+1}-year Mortality" for i in range(mortality.shape[1])])
-    
-    
-    cols = pred_df.columns.tolist()
-    cols[-1] = "Over 15-year Mortality"
-    pred_df.columns = cols
-
-    pred_df.insert(0, 'Patient ID', range(1, len(pred_df) + 1))
-    df_features = df.copy()
-    df_features.insert(0, 'Patient ID', range(1, len(df) + 1))
-
-    return html.Div([
-        html.H5(f"Predictions from: {filename}"),
-        html.Div([
-            html.Div([
-                dash_table.DataTable(
-                    id='x-table',
-                    data=df_features.to_dict('records'),
-                    columns=[{'name': col, 'id': col} for col in df_features.columns],
-                    style_table={'height': 'auto', 'overflowX': 'auto'},
-                    style_cell={'minWidth': '80px', 'whiteSpace': 'normal'},
-                )
-            ], style={
-                'height': '400px', 'overflowY': 'scroll', 'overflowX': 'auto',
-                'width': '60%', 'display': 'inline-block'
-            }),
-            html.Div([
-                dash_table.DataTable(
-                    data=pred_df.to_dict('records'),
-                    columns=[{'name': col, 'id': col} for col in pred_df.columns],
-                    style_table={'height': 'auto', 'overflowX': 'auto'},
-                    style_cell={'minWidth': '100px', 'whiteSpace': 'normal'}
-                )
-            ], style={
-                'height': '400px', 'overflowY': 'scroll', 'overflowX': 'auto',
-                'width': '40%', 'display': 'inline-block'
-            })
-        ]),html.Br(),html.Div("Click on a row to view cumulative mortality plot and important baseline variables at individual level for that patient."),
-    ]), {'df_features': df.to_dict('records'), 'pred_df': pred_df.to_dict('records'), 'scaled_df': df_scaled.to_dict('records'), 'mask': mask.values.tolist()}
-
-@app.callback(
-    Output('mortality-plot', 'figure'),
-    Input('x-table', 'active_cell'),
-    State('memory-predictions', 'data'),
-    prevent_initial_call=True
-)
-def plot_mortality(active_cell, memory):
-    if not memory or not active_cell:
-        raise dash.exceptions.PreventUpdate
-
-    i = active_cell['row']
-    mortality = np.array([
-        [v for k, v in row.items() if k != 'Patient ID']
-        for row in memory['pred_df']
-    ])
-
-    y = mortality[i,:15]
-    x = list(range(1, len(y)+1))
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y, mode='lines+markers', line_shape='hv',name=f'Patient {i+1}'))
-    fig.update_layout(title=f'Mortality Risk for Patient {i+1}',
-                      xaxis_title='Year',
-                      yaxis_title='Cumulative Mortality',
-                      template='plotly_white',
-                      xaxis=dict(tickmode='linear', dtick=1),
-                      yaxis=dict(range=[-0.01, 1.01]))
-    return fig
-
-@app.callback(
-    Output('shap-plot', 'children'),
-    Output('feature-editor', 'children'),
-    Output('current-patient-index', 'data'),
-    Output('edited-row', 'data'),
-    Output('current-order', 'data'),
-    Input('x-table', 'active_cell'),
-    State('memory-predictions', 'data'),
-    prevent_initial_call=True
-)
-def show_shap(active_cell, memory):
-    if not active_cell or not memory:
-        raise dash.exceptions.PreventUpdate
-
-    i = active_cell['row']
-    df_scaled = pd.DataFrame(memory['scaled_df'])
-    mask = pd.DataFrame(memory['mask'],dtype='float32')
-    X_and_mask_eval = np.concatenate((df_scaled.values, mask.values), axis=1)
-
-    df_display = pd.DataFrame(memory['df_features'])
-
-    df_combined = pd.concat([df_display, mask], axis=1)
-    df_combined.columns = feature_name
-
-    img, current_order = get_waterfall_base64(X_and_mask_eval, df_combined, i)
-
-
-    row_data = df_combined.iloc[i].to_dict()
-    table = dash_table.DataTable(
-        id='editable-table',
-        columns=[{'name': k, 'id': k, 'editable': True} for k in row_data],
-        data=[row_data],
-        style_table={'overflowX': 'auto'},
-        style_cell={'minWidth': '80px', 'whiteSpace': 'normal'}
-    )
-
-    return (
-        html.Div([
-            html.H5(f"SHAP Waterfall Plot for Patient {i+1}"),
-            html.Img(src=img, style={'maxWidth': '100%', 'height': 'auto', 'border': '1px solid lightgray'}),
-            html.Br(),
-            html.Br(),
-            html.Div("You can edit the baseline variable values below and click 'Update SHAP' to see the updated SHAP plot.")
-        ]),
-        table,
-        i,
-        row_data,
-        current_order
-    )
-
-@app.callback(
-    Output('shap-plot-updated', 'children'),
-    Input('update-shap-button', 'n_clicks'),
-    State('editable-table', 'data'),
-    State('memory-predictions', 'data'),
-    State('current-patient-index', 'data'),
-    State('current-order', 'data'),
-    prevent_initial_call=True
-)
-def update_shap(n_clicks, edited_data, memory, index, current_order):
-    if not edited_data or not memory:
-        raise dash.exceptions.PreventUpdate
-
-    df_raw = pd.DataFrame(edited_data)
-    df_raw = df_raw.apply(pd.to_numeric, errors='coerce')
-    df_raw_feature = df_raw.iloc[:, :68]  
-    df_raw_mask = df_raw.iloc[:, 68:]
-    df_raw_feature_scaled = (df_raw_feature - x_mean) / x_std
-    df_raw_feature_scaled = df_raw_feature_scaled.fillna(0)
-    X_and_mask_eval = np.concatenate((df_raw_feature_scaled.values, df_raw_mask.values), axis=1)
-
-    combined = df_raw.copy()
-    combined.columns = feature_name
-
-    img,_= get_waterfall_base64(X_and_mask_eval, combined, 0, order=current_order)
-
-    return html.Div([
-        html.H5(f"Updated SHAP Waterfall Plot for Modified Patient {index+1}"),
-        html.Img(src=img, style={'maxWidth': '100%', 'height': 'auto', 'border': '1px solid lightgray'})
-    ])
-
-
-
-
-if __name__=='__main__':
-    app.run(debug=True, host='0.0.0.0', port=8060)

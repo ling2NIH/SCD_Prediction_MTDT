@@ -1,3 +1,9 @@
+
+----------- v1.2.1 -----------
+- Powered by Multi-Task DeepHit v2.14.
+- Placed codes for model to utils.
+- Organized required files and saved into utils folder.
+
 ----------- v1.2.0 -----------
 - Powered by Multi-Task DeepHit v2.14. Introduced temporal weighting in the longitudinal loss to make the model more sensitive to early changes in risk factors.
 - Added conformal prediction intervals for mortality risk.
