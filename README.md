@@ -1,4 +1,10 @@
 
+
+----------- v1.2.2 -----------
+- Powered by Multi-Task DeepHit v2.14.
+- Fixed the issue : ImportError: libgomp.so.1: cannot open shared object file: No such file or directory.
+- Moved the app deployment to Posit Connect Cloud.
+
 ----------- v1.2.1 -----------
 - Powered by Multi-Task DeepHit v2.14.
 - Placed codes for model to utils.
