@@ -95,7 +95,7 @@ std_list = np.load("./utils/data_info/std_long.npy")
 long_names = np.load("./utils/data_info/long_names.npy", allow_pickle=True)
 with open("./utils/saved_explainers/explainer_v2.14.2.dill","rb") as f:
     explainer = dill.load(f)
-
+explainer.model.f.__globals__['model'] = model
 
 #######################refine utility functions for the app ###########################
 
