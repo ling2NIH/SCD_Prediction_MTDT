@@ -1,11 +1,11 @@
 dash
 dash-bootstrap-components
 pandas
-numpy
+numpy==1.26.4
 plotly
 scipy
 scikit-learn
-paddlepaddle
+paddlepaddle==3.1.1
 visualdl
 shap
 dill

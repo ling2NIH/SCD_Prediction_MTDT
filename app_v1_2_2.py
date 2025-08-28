@@ -80,7 +80,7 @@ batch_basis_eval = np.load("./utils/data_info/batch_basis_eval.npy")
 mean_list = np.load("./utils/data_info/mean_long.npy")
 std_list = np.load("./utils/data_info/std_long.npy")
 long_names = np.load("./utils/data_info/long_names.npy", allow_pickle=True)
-with open("./utils/saved_explainers/explainer_v2.14.dill","rb") as f:
+with open("./utils/saved_explainers/explainer_v2.14.2.dill","rb") as f:
     explainer = dill.load(f)
 
 #######################refine utility functions for the app ###########################
@@ -466,7 +466,7 @@ app.layout = dbc.Container(fluid=True, children=[
                 html.Br(),
                 "App designed by Gefei Lin",
                 html.Br(),
-                "Version 1.2.0"
+                "Version 1.2.2"
             ], className="text-center text-muted mt-4")))
             
 ])
@@ -1036,5 +1036,5 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))  
-    app.run(debug=True, host='0.0.0.0', port=port)
+    app.run(debug=False, host='0.0.0.0', port=port)
 
