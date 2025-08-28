@@ -71,6 +71,19 @@ model_copy = ModelDeepHit_Multitask(input_dims, network_settings, outcome_config
 model_copy.set_state_dict(paddle.load("./utils/saved_models/model_multitask_deephit_v2.14_0.9829.pdparams"))
 model_copy.eval()
 
+def predict_flat(X_and_mask):
+
+    X = X_and_mask[:, :68]
+    mask = X_and_mask[:, 68:]
+    X_tensor = paddle.to_tensor(X, dtype='float32')
+    mask_tensor = paddle.to_tensor(mask, dtype='float32')
+
+    survival_pred,_ = model.predict(X_tensor, mask_tensor)
+    survival_pred = survival_pred[:, 0, :]
+    survival_pred = survival_pred.numpy()
+
+    return np.sum(survival_pred[:, 0:5], axis=1)
+
 x_mean = np.load("./utils/data_info/x_mean.npy")
 x_std = np.load("./utils/data_info/x_std.npy")
 feature_name = np.load("./utils/data_info/feature_name.npy", allow_pickle=True)
@@ -82,6 +95,7 @@ std_list = np.load("./utils/data_info/std_long.npy")
 long_names = np.load("./utils/data_info/long_names.npy", allow_pickle=True)
 with open("./utils/saved_explainers/explainer_v2.14.2.dill","rb") as f:
     explainer = dill.load(f)
+
 
 #######################refine utility functions for the app ###########################
 
