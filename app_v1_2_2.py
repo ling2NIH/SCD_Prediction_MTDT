@@ -169,12 +169,24 @@ class PaddleWrapper:
 def paddle_manual_conformal_interval(paddle_model, X_calib, y_calib, X_test, alpha=0.1,horizon=5):
     model_wraped = PaddleWrapper(paddle_model,horizon=horizon)
 
+    alpha = 0.05 if alpha is None else float(alpha)
+    alpha = float(np.clip(alpha, 1e-6, 0.999))
+    X_calib = np.asarray(X_calib, dtype=np.float32)
+    y_calib = np.asarray(y_calib, dtype=np.float32).reshape(-1)
+    X_test = np.asarray(X_test, dtype=np.float32)
+
     y_pred_calib = model_wraped.predict(X_calib)
 
-    residuals = np.abs(y_calib.reshape(-1) - y_pred_calib.reshape(-1)) 
+    residuals = np.abs(y_calib - y_pred_calib.reshape(-1)) 
     n = len(y_calib)
-    tau = np.ceil((1 - alpha) * (n + 1)) / n
-    q = np.quantile(residuals, tau)
+    if n == 0:
+        raise ValueError("Calibration set is empty after filtering.")
+    # Practical quantile to avoid saturation to max residual when n is small.
+    k = int(np.ceil((1 - alpha) * (n + 1)))
+    k = min(max(k, 1), n)
+    tau = (k - 0.5) / n
+    tau = float(np.clip(tau, 0.0, 1.0))
+    q = np.quantile(residuals, tau, method='linear')
     #q = np.quantile(residuals, 1 - alpha)
     
     y_pred_test = model_wraped.predict(X_test)
@@ -186,6 +198,29 @@ def paddle_manual_conformal_interval(paddle_model, X_calib, y_calib, X_test, alp
     intervals = np.vstack([lower_bound, upper_bound]).T
     return y_pred_test, intervals,residuals
 
+
+def _pava_non_decreasing(values):
+    """Project 1D sequence to a non-decreasing sequence via PAVA."""
+    x = np.asarray(values, dtype=np.float64).reshape(-1)
+    if x.size <= 1:
+        return x
+
+    blocks = []  # [start, end, mean]
+    for i, v in enumerate(x):
+        blocks.append([i, i, float(v)])
+        while len(blocks) >= 2 and blocks[-2][2] > blocks[-1][2]:
+            b2 = blocks.pop()
+            b1 = blocks.pop()
+            n1 = b1[1] - b1[0] + 1
+            n2 = b2[1] - b2[0] + 1
+            m = (b1[2] * n1 + b2[2] * n2) / (n1 + n2)
+            blocks.append([b1[0], b2[1], m])
+
+    y = np.empty_like(x)
+    for s, e, m in blocks:
+        y[s:e + 1] = m
+    return y
+
 def conformal_mortality_prediction(
     model_original,
     X_and_mask,
@@ -195,27 +230,29 @@ def conformal_mortality_prediction(
     max_horizon=10,
     alpha=0.05
 ):
+    X_and_mask = np.asarray(X_and_mask, dtype=np.float32)
+    X_and_mask_test = np.asarray(X_and_mask_test, dtype=np.float32)
+    if X_and_mask_test.ndim == 1:
+        X_and_mask_test = X_and_mask_test.reshape(1, -1)
 
-    corrected_upper_bound = 0
-    corrected_lower_bound = 0
+    E_train = np.asarray(E_train).reshape(-1).astype(np.int64)
+    T_train = np.asarray(T_train).reshape(-1).astype(np.int64)
 
     years = []
     predicted_mortality = []
     lower_bounds = []
     upper_bounds = []
-    corrected_lower_bounds = []
-    corrected_upper_bounds = []
 
     for i in range(max_horizon):
-        censored_mask = (E_train == 0).squeeze()
-        uncensored_mask = (E_train == 1).squeeze()
-        censored_alive_mask = censored_mask & (T_train.squeeze() >= i + 1)
+        censored_mask = (E_train == 0)
+        uncensored_mask = (E_train == 1)
+        censored_alive_mask = censored_mask & (T_train >= i + 1)
         available_mask = (uncensored_mask | censored_alive_mask)
 
         X_and_mask_available = X_and_mask[available_mask]
         
 
-        y_label = np.zeros_like(E_train)
+        y_label = np.zeros(len(E_train), dtype=np.float32)
         for j in range(len(E_train)):
             if E_train[j] == 1 and T_train[j] <= i + 1:
                 y_label[j] = 1
@@ -224,27 +261,27 @@ def conformal_mortality_prediction(
             elif E_train[j] == 0 and T_train[j] >= i + 1:
                 y_label[j] = 0
 
-        y_label_available = y_label[available_mask].astype(float)
+        y_label_available = y_label[available_mask]
 
         y_pred_test, intervals, residuals = paddle_manual_conformal_interval(
             model_original, X_and_mask_available, y_label_available,
             X_and_mask_test, alpha=alpha, horizon=i + 1
         )
 
-        # Conformal accumulation (monotonic correction)
-        corrected_upper_bound = max(corrected_upper_bound, intervals[0, 1])
-        corrected_lower_bound = max(corrected_lower_bound, intervals[0, 0])
-
         years.append(i + 1)
         predicted_mortality.append(y_pred_test[0])
         lower_bounds.append(intervals[0, 0])
         upper_bounds.append(intervals[0, 1])
-        corrected_lower_bounds.append(corrected_lower_bound)
-        corrected_upper_bounds.append(corrected_upper_bound)
 
         print(f'At year {i+1}, predicted mortality: {y_pred_test[0]:.4f}, '
-              f'interval: [{intervals[0, 0]:.4f}, {intervals[0, 1]:.4f}], '
-              f'corrected interval: [{corrected_lower_bound:.4f}, {corrected_upper_bound:.4f}]')
+              f'interval: [{intervals[0, 0]:.4f}, {intervals[0, 1]:.4f}]')
+
+    corrected_lower_bounds = _pava_non_decreasing(lower_bounds)
+    corrected_upper_bounds = _pava_non_decreasing(upper_bounds)
+    corrected_upper_bounds = np.maximum(corrected_upper_bounds, corrected_lower_bounds)
+
+    corrected_lower_bounds = np.clip(corrected_lower_bounds, 0.0, 1.0).tolist()
+    corrected_upper_bounds = np.clip(corrected_upper_bounds, 0.0, 1.0).tolist()
 
     return {
         'years': years,
@@ -407,6 +444,9 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
     dcc.Store(id='Current-coefficients'),
     dcc.Store(id='Current-mortality'),
     dcc.Store(id='Current-bounds'),
+    dcc.Store(id='update-ran', data=False),
+    dcc.Store(id='interval-enabled', data=False),
+    dcc.Store(id='interval-enabled-updated', data=False),
 
     # ── Header banner ───────────────────────────────────────────────────────
     dbc.Row(dbc.Col(
@@ -557,17 +597,17 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         (1, "Download Example CSV for the required format."),
                         (2, "Upload a CSV with 68 numeric columns."),
                         (3, "(Optional) Upload calibration data for prediction intervals."),
-                        (4, "View mortality predictions in the results panel."),
-                        (5, "Click a patient row to explore:"),
+                        (4, "View mortality predictions in the Prediction Table section."),
+                        (5, "Click a patient row to view results in all sections:"),
                     ]],
                     html.Ul([
-                        html.Li("10-year cumulative mortality curve", style={"fontSize": "0.8rem"}),
-                        html.Li("3-year trajectories of 12 risk factors", style={"fontSize": "0.8rem"}),
-                        html.Li("SHAP waterfall for 5-year mortality", style={"fontSize": "0.8rem"}),
+                        html.Li("Mortality Risk — 10-year cumulative mortality curve", style={"fontSize": "0.8rem"}),
+                        html.Li("Risk Factor Trajectories — 3-year forecast of 12 variables", style={"fontSize": "0.8rem"}),
+                        html.Li("SHAP Analysis — feature importance waterfall plot", style={"fontSize": "0.8rem"}),
                     ], style={"paddingLeft": "28px", "marginBottom": "6px"}),
                     html.Div([
                         html.Span("6", className="step-badge"),
-                        html.Span("Edit features & click 'Update Analysis'.", style={"fontSize": "0.82rem"})
+                        html.Span("Click 'Edit Features' below the SHAP plot to modify values, then click 'Update Analysis'.", style={"fontSize": "0.82rem"})
                     ]),
                 ])
             ], className="shadow mb-3"),
@@ -620,8 +660,9 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                        "background": "#eef6ff", "borderRadius": "10px",
                                        "padding": "16px", "marginBottom": "10px"}
                             ),
-                            dcc.Loading(id='loading-mortality', type='dot',
-                                        children=html.Div(id='mortality-plot')),
+                            html.Div(id='wrap-mortality',
+                                     children=dcc.Loading(id='loading-mortality', type='dot',
+                                                          children=html.Div(id='mortality-plot'))),
                             html.Div(
                                 id='alpha-container-updated',
                                 children=[
@@ -652,8 +693,9 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
 
                         # ── Section 3: Risk Factor Trajectories ─────────────
                         dbc.AccordionItem([
-                            dcc.Loading(id='loading-trajectory', type='dot',
-                                        children=html.Div(id='trajectory-plot')),
+                            html.Div(id='wrap-trajectory',
+                                     children=dcc.Loading(id='loading-trajectory', type='dot',
+                                                          children=html.Div(id='trajectory-plot'))),
                             dcc.Loading(id='loading-update_trajectory', type='dot',
                                         children=html.Div(id='trajectory-plot-updated')),
                         ],
@@ -664,24 +706,83 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                             item_id="acc-trajectories",
                         ),
 
-                        # ── Section 4: SHAP & Feature Editor ────────────────
+                        # ── Section 4: SHAP Analysis ─────────────────────────
                         dbc.AccordionItem([
+                            # 1. Original SHAP
                             dcc.Loading(id='loading-shap', type='dot',
                                         children=html.Div(id='shap-plot')),
-                            html.Div(id='feature-editor'),
-                            dbc.Button([
-                                html.I(className="fas fa-sync-alt me-2"),
-                                "Update Analysis"
-                            ], id='update-shap-button', color="primary",
-                               className="mt-3 px-4", style={"display": "none",
-                                                             "borderRadius": "8px",
-                                                             "fontWeight": "600"}),
+
+                            # 2. Updated SHAP (appears after Update Analysis)
                             dcc.Loading(id='loading-update', type='dot',
                                         children=html.Div(id='shap-plot-updated', className="mt-3")),
+
+                            # hint — visible above the button
+                            html.Div([
+                                html.I(className="fas fa-edit me-1 text-primary"),
+                                html.Span(
+                                    "Click 'Edit Features' below to modify this patient's values and see how the predictions change.",
+                                    style={"fontSize": "0.82rem", "color": "#6c757d"})
+                            ], id='editor-hint',
+                               style={"display": "none", "marginTop": "12px", "marginBottom": "4px"}),
+
+                            # 3. "Edit Features" toggle button
+                            dbc.Button([
+                                html.I(className="fas fa-sliders-h me-2"),
+                                "Edit Features"
+                            ], id='btn-open-editor', color="primary",
+                               className="px-4",
+                               style={"display": "none", "borderRadius": "8px",
+                                      "fontWeight": "600",
+                                      "background": "linear-gradient(90deg,#003087,#0067B1)",
+                                      "border": "none"}),
+
+                            # 4. Inline collapsible editor panel
+                            dbc.Collapse(
+                                html.Div([
+                                    dbc.Alert([
+                                        html.I(className="fas fa-info-circle me-2 text-primary"),
+                                        "Search and edit feature values below, then click 'Update Analysis' to see the revised predictions."
+                                    ], color="light", className="py-2 px-3 border mb-2",
+                                       style={"fontSize": "0.85rem", "borderRadius": "8px",
+                                              "borderColor": "#bee2ff !important"}),
+                                    dbc.InputGroup([
+                                        dbc.InputGroupText(
+                                            html.I(className="fas fa-search"),
+                                            style={"background": "#eef6ff",
+                                                   "borderColor": "#0067B1"}),
+                                        dbc.Input(
+                                            id='feature-search',
+                                            placeholder="Search feature name...",
+                                            debounce=False,
+                                            style={"borderColor": "#0067B1",
+                                                   "fontSize": "0.9rem"}),
+                                        dbc.Button(
+                                            html.I(className="fas fa-times"),
+                                            id='feature-search-clear',
+                                            color="outline-secondary", size="sm",
+                                            style={"borderColor": "#dee2e6"}),
+                                    ], className="mb-2"),
+                                    html.Div(id='feature-editor',
+                                             style={"overflowX": "auto", "width": "100%"}),
+                                    html.Hr(style={"borderColor": "#dee2e6"}),
+                                    dbc.Button([
+                                        html.I(className="fas fa-sync-alt me-2"),
+                                        "Update Analysis"
+                                    ], id='update-shap-button', color="primary",
+                                       className="px-4",
+                                       style={"borderRadius": "8px", "fontWeight": "600",
+                                              "background": "linear-gradient(90deg,#003087,#0067B1)",
+                                              "border": "none"}),
+                                ], style={"background": "#f8faff", "borderRadius": "10px",
+                                          "padding": "16px", "marginTop": "12px",
+                                          "border": "1px solid #dee2e6"}),
+                                id="feature-offcanvas",
+                                is_open=False,
+                            ),
                         ],
                             title=html.Span([
                                 html.I(className="fas fa-water me-2"),
-                                "SHAP Analysis & Feature Editor"
+                                "SHAP Analysis"
                             ], style={"fontWeight": "600", "color": "#4a1a6c"}),
                             item_id="acc-shap",
                         ),
@@ -698,6 +799,25 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
             ], className="shadow"), xs=12, md=8, lg=9
         )
     ]),
+
+    # ── Update Toast notification ────────────────────────────────────────────
+    dbc.Toast(
+        [html.I(className="fas fa-check-circle me-2 text-success"),
+         "Analysis updated — see results below."],
+        id="update-toast",
+        header="Results Ready",
+        is_open=False,
+        dismissable=True,
+        duration=4000,
+        style={"position": "fixed", "bottom": 24, "right": 24,
+               "zIndex": 9999, "minWidth": "260px",
+               "boxShadow": "0 4px 16px rgba(0,0,0,.18)",
+               "borderLeft": "4px solid #0067B1"},
+    ),
+
+
+    # ── Scroll anchor (hidden, used by clientside callback) ──────────────────
+    html.Div(id='scroll-dummy', style={"display": "none"}),
 
     # ── Footer ──────────────────────────────────────────────────────────────
     dbc.Row(dbc.Col(
@@ -795,20 +915,23 @@ def preprocess_calibration(contents, filename):
     df_scaled = (df_calibration_no_outcome - x_mean) / x_std
     df_scaled = df_scaled.fillna(0)
 
-    data_calibration_scaled = np.asarray(df_scaled)
+    data_calibration_scaled = np.asarray(df_scaled, dtype=np.float32)
     data_calibration_scaled_with_mask = np.concatenate((data_calibration_scaled, mask), axis=1)
-    Event_time = np.asarray(df_calibration[['Event_time']])/365.25
+    Event_time = np.asarray(df_calibration['Event_time'], dtype=np.float64) / 365.25
     Event_time = np.ceil(Event_time)
     Event_time[Event_time >= 15] = 16
+    Event_time = np.clip(Event_time, 1, 16).astype(np.int64)
 
-    Event_status = np.asarray(df_calibration[['Event_status']])
+    Event_status = np.asarray(df_calibration['Event_status'], dtype=np.int64)
+    Event_status = np.where(Event_status > 0, 1, 0).astype(np.int64)
 
     print("Calibration data processed successfully.")
     
 
     return (
         {'data_calibration_scaled_with_mask': data_calibration_scaled_with_mask.tolist(),
-         'Event_time_calibration': Event_time, 'Event_status_calibration': Event_status},
+         'Event_time_calibration': Event_time.tolist(),
+         'Event_status_calibration': Event_status.tolist()},
         dbc.Badge([html.I(className="fas fa-check-circle me-1"), f"{filename} uploaded"],
                   color="success", className="px-3 py-2"),
         dbc.Badge([html.I(className="fas fa-shield-alt me-1"), "Prediction interval enabled"],
@@ -919,7 +1042,8 @@ def predict(contents, filename):
                     style_data_conditional=_tbl_data_cond,
                 )
             ], className="tbl-left",
-               style={'height': '380px', 'overflowY': 'scroll', 'overflowX': 'auto'}),
+               style={'height': f'{min(44 + len(df) * 36, 600)}px',
+                      'overflowY': 'auto', 'overflowX': 'auto'}),
 
             # Predictions table
             html.Div([
@@ -944,7 +1068,8 @@ def predict(contents, filename):
                     style_data_conditional=_tbl_data_cond,
                 )
             ], className="tbl-right",
-               style={'height': '380px', 'overflowY': 'scroll', 'overflowX': 'auto'})
+               style={'height': f'{min(44 + len(df) * 36, 600)}px',
+                      'overflowY': 'auto', 'overflowX': 'auto'})
         ]),
 
         html.Br(),
@@ -958,7 +1083,7 @@ def predict(contents, filename):
         html.Br(), html.Br(),
         dbc.Alert([
             html.I(className="fas fa-mouse-pointer me-2"),
-            "Click on a patient row to view the mortality curve, risk factor trajectories, and SHAP analysis."
+            "Click on a patient row to populate the Mortality Risk, Risk Factor Trajectories, and SHAP Analysis sections."
         ], color="info", className="py-2 px-3",
            style={"fontSize": "0.85rem", "borderRadius": "8px"}),
         html.Hr(style={"borderColor": "#dee2e6"})
@@ -979,13 +1104,38 @@ def toggle_download_button(memory):
     return {"display": "none"}
 
 @app.callback(
+    Output('update-ran', 'data'),
+    Input('update-shap-button', 'n_clicks'),
+    Input('x-table', 'active_cell'),
+    prevent_initial_call=True
+)
+def track_update_ran(n_clicks, active_cell):
+    from dash import ctx
+    if ctx.triggered_id == 'update-shap-button' and n_clicks:
+        return True
+    return False   # reset when new patient row is clicked
+
+
+@app.callback(
     Output('alpha-container', 'style'),
     Input('memory-calibration', 'data'),
-    Input('x-table', 'active_cell')
+    Input('x-table', 'active_cell'),
+    Input('update-shap-button', 'n_clicks'),
+    State('update-ran', 'data'),
+    State('memory-predictions', 'data'),
 )
-def toggle_slider_visibility(calib_data, active_cell):
-    if calib_data is not None and active_cell is not None:
-        return {"display": "block", "marginTop": "20px"}
+def toggle_slider_visibility(calib_data, active_cell, n_clicks, update_ran, memory_predictions):
+    from dash import ctx
+    # Hide if update was just clicked, or if update already ran and calib is being reloaded
+    if ctx.triggered_id == 'update-shap-button' and n_clicks:
+        return {"display": "none"}
+    if update_ran:
+        return {"display": "none"}
+    # Show if calibration loaded and there's any prediction result
+    has_result = active_cell is not None or memory_predictions is not None
+    if calib_data is not None and has_result:
+        return {"display": "block", "marginTop": "20px",
+                "background": "#eef6ff", "borderRadius": "10px", "padding": "16px"}
     return {"display": "none"}
 
 @app.callback(
@@ -1012,18 +1162,19 @@ def download_mortality_table(n_clicks, memory):
     Output('Current-bounds','data'),
     Input('x-table', 'active_cell'),
     Input('alpha-slider', 'value'),
+    Input('memory-calibration', 'data'),
+    State('interval-enabled', 'data'),
     State('memory-predictions', 'data'),
-    State('memory-calibration', 'data'),
     prevent_initial_call=True
 )
-def plot_mortality(active_cell, alpha_value, memory, memory_calibration):
+def plot_mortality(active_cell, alpha_value, memory_calibration, interval_enabled, memory):
     if not memory or not active_cell:
         raise dash.exceptions.PreventUpdate
 
-    if memory_calibration is not None:
-        plot_interval = True
-    else:
-        plot_interval = False
+    alpha_value = 0.05 if alpha_value is None else float(alpha_value)
+    alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
+
+    plot_interval = bool(memory_calibration is not None and interval_enabled)
 
     i = active_cell['row']
     mortality = np.array([
@@ -1042,11 +1193,11 @@ def plot_mortality(active_cell, alpha_value, memory, memory_calibration):
     ))
 
     if plot_interval:
-        data_calibration_scaled_with_mask = np.array(memory_calibration['data_calibration_scaled_with_mask'])
+        data_calibration_scaled_with_mask = np.asarray(memory_calibration['data_calibration_scaled_with_mask'], dtype=np.float32)
         
-        Event_time_calibration = np.array(memory_calibration['Event_time_calibration'])
+        Event_time_calibration = np.asarray(memory_calibration['Event_time_calibration']).reshape(-1).astype(np.int64)
         
-        Event_status_calibration = np.array(memory_calibration['Event_status_calibration'])
+        Event_status_calibration = np.asarray(memory_calibration['Event_status_calibration']).reshape(-1).astype(np.int64)
         df_scaled = pd.DataFrame(memory['scaled_df'])
         mask = pd.DataFrame(memory['mask'],dtype='float32')
         X_and_mask_eval = np.concatenate((df_scaled.values, mask.values), axis=1)
@@ -1100,6 +1251,23 @@ def plot_mortality(active_cell, alpha_value, memory, memory_calibration):
         hovermode="x unified",
     )
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if plot_interval else None
+
+
+@app.callback(
+    Output('interval-enabled', 'data'),
+    Input('alpha-slider', 'value'),
+    Input('memory-calibration', 'data'),
+    Input('x-table', 'active_cell'),
+    prevent_initial_call=True
+)
+def control_interval_visibility(alpha_value, memory_calibration, active_cell):
+    from dash import ctx
+    trigger = ctx.triggered_id
+    if trigger == 'alpha-slider' and memory_calibration is not None and active_cell is not None:
+        return True
+    if trigger in ['memory-calibration', 'x-table']:
+        return False
+    raise dash.exceptions.PreventUpdate
 
 @app.callback(
     Output('trajectory-plot', 'children'),
@@ -1155,7 +1323,7 @@ def show_shap(active_cell, memory):
         columns=[{'name': k, 'id': k, 'editable': True} for k in row_data],
         data=[row_data],
         style_table={'overflowX': 'auto', 'borderRadius': '8px',
-                     'overflow': 'hidden', 'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
+                     'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
         style_header=_edit_tbl_hdr,
         style_cell={'padding': '7px 10px', 'minWidth': '80px',
                     'whiteSpace': 'normal', 'fontSize': '12px',
@@ -1177,13 +1345,6 @@ def show_shap(active_cell, memory):
                 'border': '1px solid #dee2e6', 'borderRadius': '8px',
                 'boxShadow': '0 2px 8px rgba(0,0,0,.08)'
             }),
-            html.Br(), html.Br(),
-            dbc.Alert([
-                html.I(className="fas fa-edit me-2"),
-                "Edit the baseline feature values below and click 'Update Analysis' to see the revised predictions."
-            ], color="light", className="py-2 px-3 border",
-               style={"fontSize": "0.85rem", "borderRadius": "8px",
-                      "borderColor": "#bee2ff !important"}),
             html.Hr(style={"borderColor": "#dee2e6"})
         ]),
         table,
@@ -1195,22 +1356,51 @@ def show_shap(active_cell, memory):
 @app.callback(
     Output('update-shap-button', 'style'),
     Input('current-patient-index', 'data'),
-    prevent_initial_call=True
 )
 def toggle_update_button_visibility(index):
+    # Button lives in offcanvas — always fully visible there
+    return {"borderRadius": "8px", "fontWeight": "600",
+            "background": "linear-gradient(90deg,#003087,#0067B1)", "border": "none"}
+
+
+@app.callback(
+    Output('btn-open-editor', 'style'),
+    Output('editor-hint', 'style'),
+    Input('current-patient-index', 'data'),
+)
+def show_edit_button(index):
     if index is not None:
-        return {"display": "block", "marginTop": "10px"}
-    return {"display": "none"}
+        return ({"display": "inline-block", "borderRadius": "8px", "fontWeight": "600",
+                 "background": "linear-gradient(90deg,#003087,#0067B1)", "border": "none",
+                 "marginTop": "12px"},
+                {"display": "block", "marginTop": "6px", "marginBottom": "2px"})
+    return {"display": "none"}, {"display": "none"}
+
+
+@app.callback(
+    Output('feature-offcanvas', 'is_open'),
+    Input('btn-open-editor', 'n_clicks'),
+    Input('update-shap-button', 'n_clicks'),
+    State('feature-offcanvas', 'is_open'),
+    prevent_initial_call=True
+)
+def toggle_offcanvas(open_clicks, update_clicks, is_open):
+    from dash import ctx
+    if ctx.triggered_id == 'btn-open-editor':
+        return True
+    if ctx.triggered_id == 'update-shap-button':
+        return False
+    return is_open
 
 @app.callback(
     Output('alpha-container-updated', 'style'),
     Input('update-shap-button', 'n_clicks'),
     Input('memory-calibration', 'data'),
     State('current-patient-index', 'data'),
+    State('update-ran', 'data'),
 )
-
-def toggle_slider_visibility(n_clicks,calib_data, index):
-    if calib_data is not None and n_clicks is not None and index is not None:
+def toggle_slider_visibility_updated(n_clicks, calib_data, index, update_ran):
+    if calib_data is not None and index is not None and (n_clicks is not None or update_ran):
         return {"display": "block", "marginTop": "20px"}
     return {"display": "none"}
 
@@ -1220,18 +1410,19 @@ def toggle_slider_visibility(n_clicks,calib_data, index):
     Output('Current-coefficients', 'data'),
     Input('update-shap-button', 'n_clicks'),
     Input('alpha-slider-updated', 'value'),
+    Input('memory-calibration', 'data'),
     State('editable-table', 'data'),
     State('current-patient-index', 'data'),
     State('Current-mortality', 'data'),
+    State('interval-enabled-updated', 'data'),
     State('memory-predictions', 'data'),
-    State('memory-calibration', 'data'),
     prevent_initial_call=True
 )
-def update_mortality(n_clicks, alpha_value,edited_data, index, current_mortality, memory_current,memory_calibration):
-    if memory_calibration is not None:
-        plot_interval = True
-    else:
-        plot_interval = False
+def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, index, current_mortality, interval_enabled_updated, memory_current):
+    alpha_value = 0.05 if alpha_value is None else float(alpha_value)
+    alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
+
+    plot_interval = bool(memory_calibration is not None and interval_enabled_updated)
 
     if not edited_data or index is None:
         raise dash.exceptions.PreventUpdate
@@ -1272,11 +1463,11 @@ def update_mortality(n_clicks, alpha_value,edited_data, index, current_mortality
     ))
     
     if plot_interval:
-        data_calibration_scaled_with_mask = np.array(memory_calibration['data_calibration_scaled_with_mask'])
+        data_calibration_scaled_with_mask = np.asarray(memory_calibration['data_calibration_scaled_with_mask'], dtype=np.float32)
         
-        Event_time_calibration = np.array(memory_calibration['Event_time_calibration'])
+        Event_time_calibration = np.asarray(memory_calibration['Event_time_calibration']).reshape(-1).astype(np.int64)
         
-        Event_status_calibration = np.array(memory_calibration['Event_status_calibration'])
+        Event_status_calibration = np.asarray(memory_calibration['Event_status_calibration']).reshape(-1).astype(np.int64)
         
         X_and_mask_test = df_raw_feature_scaled_with_mask 
         
@@ -1360,6 +1551,23 @@ def update_mortality(n_clicks, alpha_value,edited_data, index, current_mortality
     )
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], {'coefficients': coefficients_np} 
 
+
+@app.callback(
+    Output('interval-enabled-updated', 'data'),
+    Input('alpha-slider-updated', 'value'),
+    Input('memory-calibration', 'data'),
+    Input('update-shap-button', 'n_clicks'),
+    prevent_initial_call=True
+)
+def control_interval_visibility_updated(alpha_value, memory_calibration, n_clicks):
+    from dash import ctx
+    trigger = ctx.triggered_id
+    if trigger == 'alpha-slider-updated' and memory_calibration is not None:
+        return True
+    if trigger in ['memory-calibration', 'update-shap-button']:
+        return False
+    raise dash.exceptions.PreventUpdate
+
 @app.callback(
     Output('trajectory-plot-updated', 'children'),
     Input('Current-coefficients', 'data'),  
@@ -1387,16 +1595,16 @@ def update_plot_trajectory(memory_coefficients, memory, index):
     State('memory-predictions', 'data'),
     State('current-patient-index', 'data'),
     State('current-order', 'data'),
+    State('edited-row', 'data'),
     prevent_initial_call=True
 )
-def update_shap(n_clicks, edited_data, memory, index, current_order):
+def update_shap(n_clicks, edited_data, memory, index, current_order, original_row):
     if not edited_data or not memory:
         raise dash.exceptions.PreventUpdate
 
     df_raw = pd.DataFrame(edited_data)
     df_raw = df_raw.apply(pd.to_numeric, errors='coerce')
-    df_raw_feature = df_raw.iloc[:, :68]  
-    #df_raw_mask = df_raw.iloc[:, 68:]
+    df_raw_feature = df_raw.iloc[:, :68]
     df_raw_feature_scaled = (df_raw_feature - x_mean) / x_std
     df_raw_feature_scaled = df_raw_feature_scaled.fillna(0)
     mask = ~np.isnan(df_raw_feature)
@@ -1405,7 +1613,65 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
     combined = pd.concat([df_raw_feature, df_raw_mask], axis=1)
     combined.columns = feature_name
 
-    img,_= get_waterfall_base64(X_and_mask_eval, combined, 0, order=current_order)
+    img, _ = get_waterfall_base64(X_and_mask_eval, combined, 0, order=current_order)
+
+    # ── Build change summary ─────────────────────────────────────────────────
+    change_items = []
+    if original_row:
+        orig = {k: v for k, v in original_row.items()}
+        new_row = df_raw.iloc[0].to_dict()
+        feat_cols = list(df_raw_feature.columns)
+        for col in feat_cols:
+            orig_val = orig.get(col)
+            new_val  = new_row.get(col)
+            try:
+                orig_f = float(orig_val) if orig_val is not None else None
+                new_f  = float(new_val)  if new_val  is not None else None
+                if orig_f is not None and new_f is not None and abs(orig_f - new_f) > 1e-9:
+                    change_items.append(
+                        html.Tr([
+                            html.Td(col,            style={"padding": "4px 10px",
+                                                           "fontWeight": "500"}),
+                            html.Td(f"{orig_f:.4g}", style={"padding": "4px 10px",
+                                                             "color": "#C8102E",
+                                                             "textDecoration": "line-through"}),
+                            html.Td("→",             style={"padding": "4px 6px",
+                                                             "color": "#6c757d"}),
+                            html.Td(f"{new_f:.4g}",  style={"padding": "4px 10px",
+                                                             "color": "#0067B1",
+                                                             "fontWeight": "600"}),
+                        ])
+                    )
+            except (TypeError, ValueError):
+                pass
+
+    change_summary = html.Div()
+    if change_items:
+        change_summary = html.Div([
+            html.Div([
+                html.I(className="fas fa-exchange-alt me-2"),
+                html.Span("Feature Changes", style={"fontWeight": "600"})
+            ], style={"marginBottom": "8px", "color": "#003087",
+                      "fontSize": "0.95rem"}),
+            html.Table(
+                [html.Thead(html.Tr([
+                    html.Th("Variable",      style={"padding": "4px 10px",
+                                                    "borderBottom": "2px solid #dee2e6"}),
+                    html.Th("Original",      style={"padding": "4px 10px",
+                                                    "borderBottom": "2px solid #dee2e6",
+                                                    "color": "#C8102E"}),
+                    html.Th("",              style={"padding": "4px 6px",
+                                                    "borderBottom": "2px solid #dee2e6"}),
+                    html.Th("Updated",       style={"padding": "4px 10px",
+                                                    "borderBottom": "2px solid #dee2e6",
+                                                    "color": "#0067B1"}),
+                ]))] + [html.Tbody(change_items)],
+                style={"fontSize": "0.85rem", "borderCollapse": "collapse",
+                       "width": "100%"}
+            )
+        ], style={"background": "#f8f9ff", "borderRadius": "8px",
+                  "padding": "14px 16px", "marginBottom": "16px",
+                  "border": "1px solid #dee2e6"})
 
     return html.Div([
         html.Div([
@@ -1413,6 +1679,7 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
             html.Span(f"Updated SHAP Waterfall — Modified Patient {index + 1}",
                       style={"fontWeight": "600", "fontSize": "1rem", "color": "#C8102E"})
         ], style={"marginBottom": "10px"}),
+        change_summary,
         html.Img(src=img, style={
             'maxWidth': '100%', 'height': 'auto',
             'border': '1px solid #f5c2c7', 'borderRadius': '8px',
@@ -1423,7 +1690,75 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
 
 
 
+# ── Toast: show when Update Analysis is clicked ─────────────────────────────
+@app.callback(
+    Output('update-toast', 'is_open'),
+    Input('update-shap-button', 'n_clicks'),
+    prevent_initial_call=True
+)
+def show_update_toast(n_clicks):
+    return True
+
+
+# ── Auto-scroll to updated results after update ──────────────────────────────
+app.clientside_callback(
+    """
+    function(children) {
+        if (children) {
+            setTimeout(function() {
+                var el = document.getElementById('mortality-plot-updated');
+                if (el) {
+                    el.scrollIntoView({behavior: 'smooth', block: 'start'});
+                }
+            }, 400);
+        }
+        return '';
+    }
+    """,
+    Output('scroll-dummy', 'children'),
+    Input('mortality-plot-updated', 'children'),
+    prevent_initial_call=True
+)
+
+
+# ── Hide original plots once updated plots are available ─────────────────────
+@app.callback(
+    Output('wrap-mortality',  'style'),
+    Output('wrap-trajectory', 'style'),
+    Input('update-shap-button', 'n_clicks'),
+    Input('x-table', 'active_cell'),
+    prevent_initial_call=True
+)
+def toggle_original_plots(n_clicks, active_cell):
+    from dash import ctx
+    if ctx.triggered_id == 'update-shap-button' and n_clicks:
+        return {"display": "none"}, {"display": "none"}
+    return {"display": "block"}, {"display": "block"}
+
+
+# ── Feature search: filter editable-table columns by name ────────────────────
+@app.callback(
+    Output('editable-table', 'columns'),
+    Output('feature-search', 'value'),
+    Input('feature-search', 'value'),
+    Input('feature-search-clear', 'n_clicks'),
+    State('edited-row', 'data'),
+    prevent_initial_call=True
+)
+def search_feature_columns(search, clear_clicks, row_data):
+    from dash import ctx
+    if not row_data:
+        raise dash.exceptions.PreventUpdate
+    all_cols = [{'name': k, 'id': k, 'editable': True} for k in row_data]
+    if ctx.triggered_id == 'feature-search-clear':
+        return all_cols, ""
+    if not search or not search.strip():
+        return all_cols, dash.no_update
+    filtered = [c for c in all_cols if search.strip().lower() in c['name'].lower()]
+    return (filtered if filtered else all_cols), dash.no_update
+
+
 if __name__ == '__main__':
-    port = int(os.environ.get('PORT', 8080))  
+    port = int(os.environ.get('PORT', 8080))
     app.run(debug=False, host='0.0.0.0', port=port)
 
