@@ -430,10 +430,11 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                       className="app-header-title",
                                       style={"fontSize": "1.9rem", "fontWeight": "700",
                                              "color": "white", "letterSpacing": ".5px"}),
-                            html.Span("  Mortality Prediction",
+                            html.Span("Mortality Prediction",
                                       className="app-header-title",
                                       style={"fontSize": "1.9rem", "fontWeight": "300",
-                                             "color": "rgba(255,255,255,.85)"}),
+                                             "color": "rgba(255,255,255,.85)",
+                                             "marginLeft": "0.4rem"}),
                         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
                         html.P(
                             "Multi-Task DeepHit v2.14  ·  Conformal Prediction Intervals  ·  SHAP Explainability",
