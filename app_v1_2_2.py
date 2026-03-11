@@ -373,6 +373,17 @@ app.index_string = """
       /* ── DataTable header ── */
       .dash-header { background-color: #003087 !important; color: white !important; }
 
+            /* ── slider tooltip layering ── */
+            #alpha-container, #alpha-container-updated,
+            #alpha-container .rc-slider, #alpha-container-updated .rc-slider {
+                position: relative;
+                overflow: visible !important;
+            }
+            .rc-slider-tooltip,
+            .rc-slider-tooltip-placement-bottom {
+                z-index: 3000 !important;
+            }
+
       /* ── footer bar ── */
       .app-footer {
         background: linear-gradient(135deg, #003087 0%, #0067B1 100%);
@@ -658,7 +669,8 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 ],
                                 style={"display": "none",
                                        "background": "#eef6ff", "borderRadius": "10px",
-                                       "padding": "16px", "marginBottom": "10px"}
+                                        "padding": "16px", "marginBottom": "24px",
+                                        "overflow": "visible", "position": "relative", "zIndex": 20}
                             ),
                             html.Div(id='wrap-mortality',
                                      children=dcc.Loading(id='loading-mortality', type='dot',
@@ -679,7 +691,8 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 ],
                                 style={"display": "none",
                                        "background": "#fff3f3", "borderRadius": "10px",
-                                       "padding": "16px", "marginTop": "10px"}
+                                        "padding": "16px", "marginTop": "10px", "marginBottom": "24px",
+                                        "overflow": "visible", "position": "relative", "zIndex": 20}
                             ),
                             dcc.Loading(id='loading-update_mortality', type='dot',
                                         children=html.Div(id='mortality-plot-updated')),
