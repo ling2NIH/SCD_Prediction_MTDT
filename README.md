@@ -4,6 +4,9 @@
 - Powered by Multi-Task DeepHit v2.14.
 - Fixed the issue : ImportError: libgomp.so.1: cannot open shared object file: No such file or directory.
 - Moved the app deployment to Posit Connect Cloud.
+- Redesigned the user interface with NHLBI official branding colors (#003087 navy, #0067B1 blue, #C8102E red).
+- Added NHLBI logo to the header banner.
+- Improved mobile responsiveness: layout adapts to phone and tablet screen sizes using Bootstrap breakpoints and CSS media queries.
 
 ----------- v1.2.1 -----------
 - Powered by Multi-Task DeepHit v2.14.
