@@ -586,80 +586,115 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                            "color": "white", "padding": "14px 20px"}
                 ),
                 dbc.CardBody([
+                    dbc.Accordion([
 
-                    # ── Prediction table ────────────────────────────────────
-                    dcc.Loading(id='loading-table', type='dot',
-                                children=html.Div(id='output')),
-
-                    # ── Conformal slider (original patient) ─────────────────
-                    html.Div(
-                        id='alpha-container',
-                        children=[
-                            dbc.Label([
-                                html.I(className="fas fa-sliders-h me-2 text-primary"),
-                                "Conformal Prediction Level (1 − α)"
-                            ], style={"fontWeight": "600", "marginBottom": "6px"}),
-                            dcc.Slider(
-                                id='alpha-slider', min=0.01, max=0.5, step=0.01, value=0.05,
-                                marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
-                                       0.2: '80%', 0.3: '70%', 0.5: '50%'},
-                                tooltip={"placement": "bottom", "always_visible": True}
-                            )
+                        # ── Section 1: Prediction Table ──────────────────────
+                        dbc.AccordionItem([
+                            dcc.Loading(id='loading-table', type='dot',
+                                        children=html.Div(id='output')),
                         ],
-                        style={"display": "none",
-                               "background": "#eef6ff", "borderRadius": "10px",
-                               "padding": "16px", "marginTop": "10px"}
-                    ),
+                            title=html.Span([
+                                html.I(className="fas fa-table me-2"),
+                                "Prediction Table"
+                            ], style={"fontWeight": "600", "color": "#003087"}),
+                            item_id="acc-predictions",
+                        ),
 
-                    # ── Mortality plot ──────────────────────────────────────
-                    dcc.Loading(id='loading-mortality', type='dot',
-                                children=html.Div(id='mortality-plot')),
-
-                    # ── Trajectory plot ─────────────────────────────────────
-                    dcc.Loading(id='loading-trajectory', type='dot',
-                                children=html.Div(id='trajectory-plot')),
-
-                    # ── SHAP ────────────────────────────────────────────────
-                    dcc.Loading(id='loading-shap', type='dot',
-                                children=html.Div(id='shap-plot')),
-
-                    # ── Feature editor + Update button ──────────────────────
-                    html.Div(id='feature-editor'),
-                    dbc.Button([
-                        html.I(className="fas fa-sync-alt me-2"),
-                        "Update Analysis"
-                    ], id='update-shap-button', color="primary",
-                       className="mt-3 px-4", style={"display": "none",
-                                                     "borderRadius": "8px",
-                                                     "fontWeight": "600"}),
-
-                    # ── Conformal slider (updated patient) ──────────────────
-                    html.Div(
-                        id='alpha-container-updated',
-                        children=[
-                            dbc.Label([
-                                html.I(className="fas fa-sliders-h me-2 text-primary"),
-                                "Conformal Prediction Level (1 − α) — Updated Patient"
-                            ], style={"fontWeight": "600", "marginBottom": "6px"}),
-                            dcc.Slider(
-                                id='alpha-slider-updated', min=0.01, max=0.5, step=0.01, value=0.05,
-                                marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
-                                       0.2: '80%', 0.3: '70%', 0.5: '50%'},
-                                tooltip={"placement": "bottom", "always_visible": True}
-                            )
+                        # ── Section 2: Mortality Risk ────────────────────────
+                        dbc.AccordionItem([
+                            html.Div(
+                                id='alpha-container',
+                                children=[
+                                    dbc.Label([
+                                        html.I(className="fas fa-sliders-h me-2 text-primary"),
+                                        "Conformal Prediction Level (1 − α)"
+                                    ], style={"fontWeight": "600", "marginBottom": "6px"}),
+                                    dcc.Slider(
+                                        id='alpha-slider', min=0.01, max=0.5, step=0.01, value=0.05,
+                                        marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
+                                               0.2: '80%', 0.3: '70%', 0.5: '50%'},
+                                        tooltip={"placement": "bottom", "always_visible": True}
+                                    )
+                                ],
+                                style={"display": "none",
+                                       "background": "#eef6ff", "borderRadius": "10px",
+                                       "padding": "16px", "marginBottom": "10px"}
+                            ),
+                            dcc.Loading(id='loading-mortality', type='dot',
+                                        children=html.Div(id='mortality-plot')),
+                            html.Div(
+                                id='alpha-container-updated',
+                                children=[
+                                    dbc.Label([
+                                        html.I(className="fas fa-sliders-h me-2 text-primary"),
+                                        "Conformal Prediction Level (1 − α) — Updated Patient"
+                                    ], style={"fontWeight": "600", "marginBottom": "6px"}),
+                                    dcc.Slider(
+                                        id='alpha-slider-updated', min=0.01, max=0.5, step=0.01, value=0.05,
+                                        marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
+                                               0.2: '80%', 0.3: '70%', 0.5: '50%'},
+                                        tooltip={"placement": "bottom", "always_visible": True}
+                                    )
+                                ],
+                                style={"display": "none",
+                                       "background": "#fff3f3", "borderRadius": "10px",
+                                       "padding": "16px", "marginTop": "10px"}
+                            ),
+                            dcc.Loading(id='loading-update_mortality', type='dot',
+                                        children=html.Div(id='mortality-plot-updated')),
                         ],
-                        style={"display": "none",
-                               "background": "#fff3f3", "borderRadius": "10px",
-                               "padding": "16px", "marginTop": "10px"}
-                    ),
+                            title=html.Span([
+                                html.I(className="fas fa-heartbeat me-2"),
+                                "Mortality Risk"
+                            ], style={"fontWeight": "600", "color": "#0067B1"}),
+                            item_id="acc-mortality",
+                        ),
 
-                    dcc.Loading(id='loading-update_mortality', type='dot',
-                                children=html.Div(id='mortality-plot-updated')),
-                    dcc.Loading(id='loading-update_trajectory', type='dot',
-                                children=html.Div(id='trajectory-plot-updated')),
-                    dcc.Loading(id='loading-update', type='dot',
-                                children=html.Div(id='shap-plot-updated', className="mt-3")),
-                ], id="main-results-body", style={"padding": "24px"})
+                        # ── Section 3: Risk Factor Trajectories ─────────────
+                        dbc.AccordionItem([
+                            dcc.Loading(id='loading-trajectory', type='dot',
+                                        children=html.Div(id='trajectory-plot')),
+                            dcc.Loading(id='loading-update_trajectory', type='dot',
+                                        children=html.Div(id='trajectory-plot-updated')),
+                        ],
+                            title=html.Span([
+                                html.I(className="fas fa-chart-line me-2"),
+                                "Risk Factor Trajectories"
+                            ], style={"fontWeight": "600", "color": "#155724"}),
+                            item_id="acc-trajectories",
+                        ),
+
+                        # ── Section 4: SHAP & Feature Editor ────────────────
+                        dbc.AccordionItem([
+                            dcc.Loading(id='loading-shap', type='dot',
+                                        children=html.Div(id='shap-plot')),
+                            html.Div(id='feature-editor'),
+                            dbc.Button([
+                                html.I(className="fas fa-sync-alt me-2"),
+                                "Update Analysis"
+                            ], id='update-shap-button', color="primary",
+                               className="mt-3 px-4", style={"display": "none",
+                                                             "borderRadius": "8px",
+                                                             "fontWeight": "600"}),
+                            dcc.Loading(id='loading-update', type='dot',
+                                        children=html.Div(id='shap-plot-updated', className="mt-3")),
+                        ],
+                            title=html.Span([
+                                html.I(className="fas fa-water me-2"),
+                                "SHAP Analysis & Feature Editor"
+                            ], style={"fontWeight": "600", "color": "#4a1a6c"}),
+                            item_id="acc-shap",
+                        ),
+
+                    ],
+                        id="result-accordion",
+                        active_item=["acc-predictions", "acc-mortality",
+                                     "acc-trajectories", "acc-shap"],
+                        always_open=True,
+                        flush=False,
+                        style={"borderRadius": "10px", "overflow": "hidden"},
+                    ),
+                ], id="main-results-body", style={"padding": "16px"})
             ], className="shadow"), xs=12, md=8, lg=9
         )
     ]),
