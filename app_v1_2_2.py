@@ -130,10 +130,20 @@ def create_trajectory_plot(person_id,coeffcients,updated_coeffcients=None):
 
 
     fig.update_layout(
-        height=200 * math.ceil(num_variables / 4),
-        title_text=f"Predicted 3-Year Trajectories of Risk Factors for Patient {person_id+1}",
-        template='plotly_white'
+        height=220 * math.ceil(num_variables / 4),
+        title_text=f"Predicted 3-Year Trajectories of Risk Factors — Patient {person_id + 1}",
+        title_font=dict(size=15, color="#003087", family="Segoe UI, Arial"),
+        template='plotly_white',
+        plot_bgcolor="rgba(248,251,255,0.9)",
+        paper_bgcolor="white",
+        font=dict(family="Segoe UI, Arial, sans-serif", size=11, color="#444"),
+        margin=dict(t=80, b=40, l=40, r=20),
+        legend=dict(
+            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
+            bgcolor="rgba(255,255,255,0.85)", bordercolor="#dee2e6", borderwidth=1
+        ),
     )
+    fig.update_annotations(font=dict(size=10, color="#555"))
 
     return fig
 
@@ -272,12 +282,123 @@ def get_waterfall_base64(X_and_mask_eval,df_combined_with_mask_eval,index, order
 #################################### Dash app #################################
 
 # Initialize Dash app
-app = dash.Dash(__name__, external_stylesheets=[dbc.themes.FLATLY], suppress_callback_exceptions=True)
+BRAND_COLOR   = "#003087"   # NHLBI deep navy
+ACCENT_COLOR  = "#0067B1"   # NHLBI medium blue
+DANGER_COLOR  = "#C8102E"   # NHLBI red
+SUCCESS_COLOR = "#2dc653"
+
+custom_css = {
+    "body": {"background": "#f0f4f8"},
+}
+
+app = dash.Dash(
+    __name__,
+    external_stylesheets=[
+        dbc.themes.FLATLY,
+        "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.0/css/all.min.css",
+    ],
+    suppress_callback_exceptions=True,
+)
 app.title = "Sickle Cell Disease Mortality Prediction"
 
+# ── global inline CSS injected into <head> ──────────────────────────────────
+app.index_string = """
+<!DOCTYPE html>
+<html>
+  <head>
+    {%metas%}
+    <title>{%title%}</title>
+    {%favicon%}
+    {%css%}
+    <style>
+      body { background: #eef2f7 !important; font-family: "Segoe UI", Arial, sans-serif; }
+
+      /* ── upload drop-zone ── */
+      .upload-zone {
+        width: 100%; height: 80px; line-height: 80px;
+        border: 2px dashed #0067B1; border-radius: 8px;
+        text-align: center; background: #f8fbff; color: #0067B1;
+        cursor: pointer; transition: background .2s;
+      }
+      .upload-zone:hover { background: #d6e8ff; }
+
+      /* ── card tweaks ── */
+      .card { border: none !important; border-radius: 12px !important; }
+      .card-header { border-radius: 12px 12px 0 0 !important; }
+
+      /* ── instruction steps ── */
+      .step-badge {
+        display: inline-block; width: 22px; height: 22px; line-height: 22px;
+        border-radius: 50%; background: #0067B1; color: white;
+        font-size: 11px; font-weight: bold; text-align: center; margin-right: 6px;
+      }
+
+      /* ── DataTable header ── */
+      .dash-header { background-color: #003087 !important; color: white !important; }
+
+      /* ── footer bar ── */
+      .app-footer {
+        background: linear-gradient(135deg, #003087 0%, #0067B1 100%);
+        color: rgba(255,255,255,.85); padding: 18px 0; margin-top: 40px;
+        font-size: 13px; text-align: center; border-radius: 12px;
+      }
+
+      /* ── side-by-side tables ── */
+      .tbl-left  { width: 60%; display: inline-block; vertical-align: top;
+                   padding-right: 10px; box-sizing: border-box; }
+      .tbl-right { width: 40%; display: inline-block; vertical-align: top;
+                   box-sizing: border-box; }
+
+      /* ══ MOBILE (≤ 767 px) ══════════════════════════════════════════════ */
+      @media (max-width: 767px) {
+
+        /* header: shrink text */
+        .app-header-title { font-size: 1.2rem !important; }
+        .app-header-sub   { font-size: 0.72rem !important; }
+        .app-header-icon  { font-size: 1.4rem !important; }
+        .app-header-wrap  { padding: 18px 16px !important; }
+
+        /* card body padding */
+        .card-body { padding: 12px !important; }
+
+        /* tables: stack vertically */
+        .tbl-left, .tbl-right {
+          width: 100% !important;
+          display: block !important;
+          padding-right: 0 !important;
+          margin-bottom: 14px;
+        }
+        /* table containers: auto height on mobile */
+        .tbl-left, .tbl-right { height: auto !important; max-height: 320px; overflow-y: auto; }
+
+        /* footer: allow wrapping */
+        .app-footer { font-size: 11px; padding: 12px 8px; line-height: 2; }
+
+        /* conformal slider boxes: reduce padding */
+        #alpha-container, #alpha-container-updated { padding: 10px !important; }
+
+        /* upload zone: shorter */
+        .upload-zone { height: 64px; line-height: 64px; font-size: 0.82rem; }
+
+        /* main panel body padding */
+        #main-results-body { padding: 12px !important; }
+      }
+    </style>
+  </head>
+  <body>
+    {%app_entry%}
+    <footer>
+      {%config%}
+      {%scripts%}
+      {%renderer%}
+    </footer>
+  </body>
+</html>
+"""
+
 # Layout: UI improvements only
-app.layout = dbc.Container(fluid=True, children=[
-    # Hidden stores
+app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, children=[
+    # ── Hidden stores ───────────────────────────────────────────────────────
     dcc.Store(id='memory-predictions'),
     dcc.Store(id='memory-calibration'),
     dcc.Store(id='current-patient-index'),
@@ -287,188 +408,280 @@ app.layout = dbc.Container(fluid=True, children=[
     dcc.Store(id='Current-mortality'),
     dcc.Store(id='Current-bounds'),
 
-    # Header
-    dbc.Row(dbc.Col(html.H2("Sickle Cell Disease Mortality Prediction", className="text-center text-primary my-4"))),
+    # ── Header banner ───────────────────────────────────────────────────────
+    dbc.Row(dbc.Col(
+        html.Div(
+            style={
+                "background": "linear-gradient(135deg, #003087 0%, #0067B1 100%)",
+                "borderRadius": "0 0 16px 16px",
+                "padding": "28px 36px",
+                "marginBottom": "28px",
+                "boxShadow": "0 4px 18px rgba(30,58,92,.25)",
+            },
+            className="app-header-wrap",
+            children=[
+                html.Div([
+                    # Left: title block
+                    html.Div([
+                        html.Div([
+                            html.I(className="fas fa-heartbeat me-3 app-header-icon",
+                                   style={"fontSize": "2rem", "color": "#C8102E"}),
+                            html.Span("Sickle Cell Disease",
+                                      className="app-header-title",
+                                      style={"fontSize": "1.9rem", "fontWeight": "700",
+                                             "color": "white", "letterSpacing": ".5px"}),
+                            html.Span("  Mortality Prediction",
+                                      className="app-header-title",
+                                      style={"fontSize": "1.9rem", "fontWeight": "300",
+                                             "color": "rgba(255,255,255,.85)"}),
+                        ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
+                        html.P(
+                            "Multi-Task DeepHit v2.14  ·  Conformal Prediction Intervals  ·  SHAP Explainability",
+                            className="app-header-sub",
+                            style={"color": "rgba(255,255,255,.65)", "marginTop": "6px",
+                                   "fontSize": "0.85rem", "marginBottom": "0"}
+                        ),
+                    ], style={"flex": "1"}),
+                    # Right: NHLBI logo
+                    html.Div(
+                        html.Img(
+                            src="https://www.nhlbi.nih.gov/themes/custom/nhlbi/logo.svg",
+                            alt="NHLBI Logo",
+                            style={
+                                "height": "56px",
+                                "filter": "brightness(0) invert(1)",  # white version on dark bg
+                                "opacity": "0.92",
+                            }
+                        ),
+                        style={"marginLeft": "24px", "flexShrink": "0"}
+                    ),
+                ], style={"display": "flex", "alignItems": "center", "justifyContent": "space-between"}),
+            ]
+        )
+    )),
 
     # Main content
     dbc.Row([
-        # Sidebar: upload and instructions
+        # ── Sidebar ─────────────────────────────────────────────────────────
         dbc.Col([
+
+            # Upload patient data
             dbc.Card([
-                dbc.CardHeader(html.H5("Upload Data", className="mb-0")),
+                dbc.CardHeader(
+                    html.Div([
+                        html.I(className="fas fa-upload me-2"),
+                        html.Span("Upload Patient Data", style={"fontWeight": "600"})
+                    ]),
+                    style={"background": "linear-gradient(90deg,#003087,#0067B1)",
+                           "color": "white", "padding": "12px 16px"}
+                ),
                 dbc.CardBody([
-                    dbc.Button(
-                        "Download Example Rows",
-                        id="btn-download-example",
-                        color="secondary",
-                        className="w-100 mb-3"
-                    ),
+                    dbc.Button([
+                        html.I(className="fas fa-file-csv me-2"),
+                        "Download Example CSV"
+                    ], id="btn-download-example", color="outline-primary",
+                       className="w-100 mb-3", size="sm"),
                     dcc.Download(id="download-example-csv"),
                     dcc.Upload(
                         id='upload-data',
-                        children=html.Div(['Click to upload patients CSV']),
-                        style={
-                            'width': '100%', 'height': '80px', 'lineHeight': '80px',
-                            'borderWidth': '2px', 'borderStyle': 'dashed', 'borderRadius': '5px',
-                            'textAlign': 'center', 'backgroundColor': '#f8f9fa'
-                        },
+                        children=html.Div([
+                            html.I(className="fas fa-cloud-upload-alt me-2",
+                                   style={"fontSize": "1.1rem"}),
+                            "Click or drag & drop patients CSV"
+                        ]),
+                        className="upload-zone",
                         multiple=False
                     ),
-                    html.Br(),
-                    html.Div(id='data-status', children='🟡 Patients data is not uploaded.'),
-                    html.Br(),
-                    html.Div(id='upload-data-status')
+                    html.Div(id='data-status',
+                             children=dbc.Badge("Data not uploaded", color="warning",
+                                                className="mt-2 px-3 py-2 w-100 text-start"),
+                             className="mt-2"),
+                    html.Div(id='upload-data-status', className="mt-1 small text-muted")
                 ])
-            ], className="shadow-sm mb-4"),
+            ], className="shadow mb-3"),
+
+            # Upload calibration data
             dbc.Card([
-                dbc.CardHeader(html.H5("Upload Calibration Data", className="mb-0")),
+                dbc.CardHeader(
+                    html.Div([
+                        html.I(className="fas fa-chart-line me-2"),
+                        html.Span("Upload Calibration Data", style={"fontWeight": "600"})
+                    ]),
+                    style={"background": "linear-gradient(90deg,#155724,#28a745)",
+                           "color": "white", "padding": "12px 16px"}
+                ),
                 dbc.CardBody([
-                    dbc.Button(
-                        "Download Example Rows",
-                        id="btn-download-calibration-example",
-                        color="secondary",
-                        className="w-100 mb-3"
-                    ),
+                    dbc.Button([
+                        html.I(className="fas fa-file-csv me-2"),
+                        "Download Example CSV"
+                    ], id="btn-download-calibration-example", color="outline-success",
+                       className="w-100 mb-3", size="sm"),
                     dcc.Download(id="download-calibration-example-csv"),
                     dcc.Upload(
                         id='upload-calibration-data',
-                        children=html.Div(['Click to upload patients CSV']),
-                        style={
-                            'width': '100%', 'height': '80px', 'lineHeight': '80px',
-                            'borderWidth': '2px', 'borderStyle': 'dashed', 'borderRadius': '5px',
-                            'textAlign': 'center', 'backgroundColor': '#f8f9fa'
-                        },
+                        children=html.Div([
+                            html.I(className="fas fa-cloud-upload-alt me-2",
+                                   style={"fontSize": "1.1rem"}),
+                            "Click or drag & drop calibration CSV"
+                        ]),
+                        className="upload-zone",
+                        style={"borderColor": "#28a745", "color": "#28a745",
+                               "background": "#f6fff8"},
                         multiple=False
                     ),
-                    html.Br(),
-                    html.Div(id='calibration-status', children='🟡 Prediction interval is not applied.'),
-                    html.Br(),
-                    html.Div(id='upload-calibration-status')
+                    html.Div(id='calibration-status',
+                             children=dbc.Badge("Prediction interval not applied",
+                                                color="warning",
+                                                className="mt-2 px-3 py-2 w-100 text-start"),
+                             className="mt-2"),
+                    html.Div(id='upload-calibration-status', className="mt-1 small text-muted")
                 ])
-            ], className="shadow-sm mb-4"),           
+            ], className="shadow mb-3"),
 
+            # Instructions
             dbc.Card([
-                dbc.CardHeader(html.H5("Instructions", className="mb-0")),
-                dbc.CardBody([
-                    html.P("1. Click 'Download Example Rows' to get a sample CSV format."),
-                    html.P("2. Upload a CSV file with 68 numeric columns representing patient data."),
-                    html.P("3. (Optional) Upload calibration data to enable conformal prediction intervals for mortality risk."),
-                    html.P("4. View mortality risk predictions after uploading data."),
-                    html.P("5. Click on a row in the patients data table to view:"),
-                    html.Ul([
-                        html.Li("Predicted cumulative mortality over 10 years"),
-                        html.Li("Predicted trajectories of 12 risk factors over 3 years"),
-                        html.Li("SHAP Analysis: Important baseline variables contributing to predicted 5-year mortality"),
+                dbc.CardHeader(
+                    html.Div([
+                        html.I(className="fas fa-info-circle me-2"),
+                        html.Span("How to Use", style={"fontWeight": "600"})
                     ]),
-                    html.P("6. Edit patient features and click 'Update Analysis' to see updated results and intervals.")
+                    style={"background": "linear-gradient(90deg,#4a1a6c,#7b2fbf)",
+                           "color": "white", "padding": "12px 16px"}
+                ),
+                dbc.CardBody([
+                    *[html.Div([
+                        html.Span(str(n), className="step-badge"),
+                        html.Span(txt, style={"fontSize": "0.82rem"})
+                    ], className="mb-2") for n, txt in [
+                        (1, "Download Example CSV for the required format."),
+                        (2, "Upload a CSV with 68 numeric columns."),
+                        (3, "(Optional) Upload calibration data for prediction intervals."),
+                        (4, "View mortality predictions in the results panel."),
+                        (5, "Click a patient row to explore:"),
+                    ]],
+                    html.Ul([
+                        html.Li("10-year cumulative mortality curve", style={"fontSize": "0.8rem"}),
+                        html.Li("3-year trajectories of 12 risk factors", style={"fontSize": "0.8rem"}),
+                        html.Li("SHAP waterfall for 5-year mortality", style={"fontSize": "0.8rem"}),
+                    ], style={"paddingLeft": "28px", "marginBottom": "6px"}),
+                    html.Div([
+                        html.Span("6", className="step-badge"),
+                        html.Span("Edit features & click 'Update Analysis'.", style={"fontSize": "0.82rem"})
+                    ]),
                 ])
+            ], className="shadow mb-3"),
 
-            ], className="shadow-sm mb-4")
-        ], width=3),
+        ], xs=12, md=4, lg=3),
 
-        # Main panel: tables and plots
+        # ── Main Results Panel ───────────────────────────────────────────────
         dbc.Col(
             dbc.Card([
-                dbc.CardHeader(html.H5("Results", className="mb-0")),
+                dbc.CardHeader(
+                    html.Div([
+                        html.I(className="fas fa-poll-h me-2"),
+                        html.Span("Analysis Results", style={"fontWeight": "600", "fontSize": "1.05rem"})
+                    ]),
+                    style={"background": "linear-gradient(90deg,#003087,#0067B1)",
+                           "color": "white", "padding": "14px 20px"}
+                ),
                 dbc.CardBody([
-                    # Predictions table and plot
-                    dcc.Loading(
-                        id='loading-table',
-                        type='circle',
-                        children=html.Div(id='output')
-                    ),
-                    
-              
+
+                    # ── Prediction table ────────────────────────────────────
+                    dcc.Loading(id='loading-table', type='dot',
+                                children=html.Div(id='output')),
+
+                    # ── Conformal slider (original patient) ─────────────────
                     html.Div(
                         id='alpha-container',
                         children=[
-                            html.Label("Select Conformal Prediction Level (1 - alpha):"),
+                            dbc.Label([
+                                html.I(className="fas fa-sliders-h me-2 text-primary"),
+                                "Conformal Prediction Level (1 − α)"
+                            ], style={"fontWeight": "600", "marginBottom": "6px"}),
                             dcc.Slider(
-                                id='alpha-slider',
-                                min=0.01,
-                                max=0.5,
-                                step=0.01,
-                                value=0.05,
-                                marks={
-                                    0.01: '99%', 0.05: '95%', 0.1: '90%',
-                                    0.2: '80%', 0.3: '70%', 0.5: '50%'
-                                },
+                                id='alpha-slider', min=0.01, max=0.5, step=0.01, value=0.05,
+                                marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
+                                       0.2: '80%', 0.3: '70%', 0.5: '50%'},
                                 tooltip={"placement": "bottom", "always_visible": True}
                             )
                         ],
-                        style={"display": "none"}  
+                        style={"display": "none",
+                               "background": "#eef6ff", "borderRadius": "10px",
+                               "padding": "16px", "marginTop": "10px"}
                     ),
-                    dcc.Loading(
-                        id='loading-mortality',
-                        type='circle',
-                        children=html.Div(id='mortality-plot')
-                    ),
-              
-                    dcc.Loading(
-                        id='loading-trajectory',
-                        type='circle',
-                        children=html.Div(id='trajectory-plot')
-                    ),
-           
-                    # SHAP analysis
-                    dcc.Loading(
-                        id='loading-shap',
-                        type='circle',
-                        children=html.Div(id='shap-plot')
-                    ),
-           
+
+                    # ── Mortality plot ──────────────────────────────────────
+                    dcc.Loading(id='loading-mortality', type='dot',
+                                children=html.Div(id='mortality-plot')),
+
+                    # ── Trajectory plot ─────────────────────────────────────
+                    dcc.Loading(id='loading-trajectory', type='dot',
+                                children=html.Div(id='trajectory-plot')),
+
+                    # ── SHAP ────────────────────────────────────────────────
+                    dcc.Loading(id='loading-shap', type='dot',
+                                children=html.Div(id='shap-plot')),
+
+                    # ── Feature editor + Update button ──────────────────────
                     html.Div(id='feature-editor'),
-                    dbc.Button("Update Analysis", id='update-shap-button', color="primary", className="mt-2",style={"display": "none"}),
-           
+                    dbc.Button([
+                        html.I(className="fas fa-sync-alt me-2"),
+                        "Update Analysis"
+                    ], id='update-shap-button', color="primary",
+                       className="mt-3 px-4", style={"display": "none",
+                                                     "borderRadius": "8px",
+                                                     "fontWeight": "600"}),
+
+                    # ── Conformal slider (updated patient) ──────────────────
                     html.Div(
                         id='alpha-container-updated',
                         children=[
-                            html.Label("Select Conformal Prediction Level (1 - alpha):"),
+                            dbc.Label([
+                                html.I(className="fas fa-sliders-h me-2 text-primary"),
+                                "Conformal Prediction Level (1 − α) — Updated Patient"
+                            ], style={"fontWeight": "600", "marginBottom": "6px"}),
                             dcc.Slider(
-                                id='alpha-slider-updated',
-                                min=0.01,
-                                max=0.5,
-                                step=0.01,
-                                value=0.05,
-                                marks={
-                                    0.01: '99%', 0.05: '95%', 0.1: '90%',
-                                    0.2: '80%', 0.3: '70%', 0.5: '50%'
-                                },
+                                id='alpha-slider-updated', min=0.01, max=0.5, step=0.01, value=0.05,
+                                marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
+                                       0.2: '80%', 0.3: '70%', 0.5: '50%'},
                                 tooltip={"placement": "bottom", "always_visible": True}
                             )
                         ],
-                        style={"display": "none"}  
+                        style={"display": "none",
+                               "background": "#fff3f3", "borderRadius": "10px",
+                               "padding": "16px", "marginTop": "10px"}
                     ),
-                    dcc.Loading(
-                        id='loading-update_mortality',
-                        type='circle',
-                        children=html.Div(id='mortality-plot-updated')
-                    ),    
-          
-                    dcc.Loading(
-                        id='loading-update_trajectory',
-                        type='circle',
-                        children=html.Div(id='trajectory-plot-updated')
-                    ),      
-                
-                    dcc.Loading(
-                        id='loading-update',
-                        type='circle',
-                        children=html.Div(id='shap-plot-updated', className="mt-3")
-                    )
-                ])
-            ], className="shadow-sm"), width=9
+
+                    dcc.Loading(id='loading-update_mortality', type='dot',
+                                children=html.Div(id='mortality-plot-updated')),
+                    dcc.Loading(id='loading-update_trajectory', type='dot',
+                                children=html.Div(id='trajectory-plot-updated')),
+                    dcc.Loading(id='loading-update', type='dot',
+                                children=html.Div(id='shap-plot-updated', className="mt-3")),
+                ], id="main-results-body", style={"padding": "24px"})
+            ], className="shadow"), xs=12, md=8, lg=9
         )
     ]),
 
-    # Footer
-    dbc.Row(dbc.Col(html.Footer(            [
-                "Model powered by Multi-Task Deephit v2.14",
-                html.Br(),
-                "App designed by Gefei Lin",
-                html.Br(),
-                "Version 1.2.2"
-            ], className="text-center text-muted mt-4")))
+    # ── Footer ──────────────────────────────────────────────────────────────
+    dbc.Row(dbc.Col(
+        html.Div(className="app-footer", children=[
+            html.Span([
+                html.I(className="fas fa-microchip me-2"),
+                "Model: Multi-Task DeepHit v2.14"
+            ]),
+            html.Span("  ·  ", style={"opacity": ".5"}),
+            html.Span([
+                html.I(className="fas fa-code me-2"),
+                "App by Gefei Lin"
+            ]),
+            html.Span("  ·  ", style={"opacity": ".5"}),
+            html.Span([
+                html.I(className="fas fa-tag me-2"),
+                "v1.2.2"
+            ]),
+        ])
+    ))
             
 ])
 
@@ -515,25 +728,31 @@ def preprocess_calibration(contents, filename):
     decoded = base64.b64decode(content_string)
     df_calibration = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
     
-    # if df_calibration does not have Event_status and Event_time columns, return an error message
+    _calib_err_status = dbc.Badge(
+        [html.I(className="fas fa-times-circle me-1"), "Prediction interval not applied"],
+        color="danger", className="mt-2 px-3 py-2 w-100 text-start"
+    )
+    def _calib_err(msg):
+        return (dash.no_update,
+                dbc.Alert(msg, color="danger", className="py-2 px-3 mt-1",
+                          style={"fontSize": "0.83rem", "borderRadius": "6px"}),
+                _calib_err_status)
+
     if 'Event_status' not in df_calibration.columns or 'Event_time' not in df_calibration.columns:
-        return dash.no_update, html.Span("Error: Calibration data must contain 'Event_status' and 'Event_time' columns.", style={"color": "red"}), html.Span("🔴 Prediction interval is not applied.", style={"color": "red"})
+        return _calib_err("Error: Calibration data must contain 'Event_status' and 'Event_time' columns.")
 
     max_event_time = df_calibration['Event_time'].max()
-    if max_event_time <16:
-        return dash.no_update, html.Span("Error: 'Event_time' in calibration data must be provided in units of days.", style={"color": "red"}), html.Span("🔴 Prediction interval is not applied.", style={"color": "red"})
+    if max_event_time < 16:
+        return _calib_err("Error: 'Event_time' must be provided in units of days.")
 
     df_calibration_no_outcome = df_calibration.drop(columns=['Event_status','Event_time'], errors='ignore')
     
     calibration_example_no_outcome = calibration_example.drop(columns=['Event_status','Event_time'], errors='ignore')
     calibration_example_columns = calibration_example_no_outcome.columns.tolist()
-    # Check if the columns in df_calibration_no_outcome match those in calibration_example_no_outcome, and their ordering.
     if not all(col in calibration_example_columns for col in df_calibration_no_outcome.columns):
-        return dash.no_update, html.Span("Error: Calibration data columns do not match the example data.", style={"color": "red"}), html.Span("🔴 Prediction interval is not applied.", style={"color": "red"})
-    
-    # check the order of columns in df_calibration_no_outcome
+        return _calib_err("Error: Calibration data columns do not match the example data.")
     if not all(df_calibration_no_outcome.columns[i] == calibration_example_no_outcome.columns[i] for i in range(len(df_calibration_no_outcome.columns))):
-        return dash.no_update, html.Span("Error: Calibration data columns are not in the correct order.", style={"color": "red"}), html.Span("🔴 Prediction interval is not applied.", style={"color": "red"})
+        return _calib_err("Error: Calibration data columns are not in the correct order.")
 
     mask = ~np.isnan(df_calibration_no_outcome)
     #mask = np.load("./mask_miss.npy", allow_pickle=True)
@@ -551,7 +770,14 @@ def preprocess_calibration(contents, filename):
     print("Calibration data processed successfully.")
     
 
-    return {'data_calibration_scaled_with_mask': data_calibration_scaled_with_mask.tolist(), 'Event_time_calibration': Event_time, 'Event_status_calibration': Event_status},html.Span(f"{filename} uploaded ✔️", style={"color": "green"}), html.Span("🟢 Prediction interval is enabled.", style={"color": "green"})
+    return (
+        {'data_calibration_scaled_with_mask': data_calibration_scaled_with_mask.tolist(),
+         'Event_time_calibration': Event_time, 'Event_status_calibration': Event_status},
+        dbc.Badge([html.I(className="fas fa-check-circle me-1"), f"{filename} uploaded"],
+                  color="success", className="px-3 py-2"),
+        dbc.Badge([html.I(className="fas fa-shield-alt me-1"), "Prediction interval enabled"],
+                  color="success", className="mt-2 px-3 py-2 w-100 text-start"),
+    )
 
 @app.callback(
     Output('output', 'children'),
@@ -570,15 +796,22 @@ def predict(contents, filename):
     df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
     # round all values to 5 decimal places
     
+    _err_status = dbc.Badge([html.I(className="fas fa-times-circle me-1"), "Data not uploaded"],
+                            color="danger", className="mt-2 px-3 py-2 w-100 text-start")
     if not all(col in X_example.columns for col in df.columns):
-        return  dash.no_update, dash.no_update,  html.Span("🔴 Patients data is not uploaded.", style={"color": "red"}),html.Div("Error: Patients data columns do not match the example data.", style={"color": "red"})
+        return dash.no_update, dash.no_update, _err_status, \
+               dbc.Alert("Error: columns do not match the example data.", color="danger",
+                         className="py-2 px-3 mt-1", style={"fontSize": "0.83rem", "borderRadius": "6px"})
 
     if not all(df.columns[i] == X_example.columns[i] for i in range(len(df.columns))):
-        return dash.no_update, dash.no_update, html.Span("🔴 Patients data is not uploaded.", style={"color": "red"}), html.Div("Error: Patients data columns are not in the correct order.", style={"color": "red"})
-
+        return dash.no_update, dash.no_update, _err_status, \
+               dbc.Alert("Error: columns are not in the correct order.", color="danger",
+                         className="py-2 px-3 mt-1", style={"fontSize": "0.83rem", "borderRadius": "6px"})
 
     if df.shape[1] != 68:
-        return dash.no_update, dash.no_update, html.Span("🔴 Patients data is not uploaded.", style={"color": "red"}), html.Div("Please make sure the patients data contains exactly 68 column of numeric values.", style={"color": "red"})
+        return dash.no_update, dash.no_update, _err_status, \
+               dbc.Alert("Please ensure the CSV contains exactly 68 numeric columns.", color="danger",
+                         className="py-2 px-3 mt-1", style={"fontSize": "0.83rem", "borderRadius": "6px"})
 
     mask = ~np.isnan(df)
     #mask = np.load("./mask_miss.npy", allow_pickle=True)
@@ -606,44 +839,98 @@ def predict(contents, filename):
     df_features = df.copy()
     df_features.insert(0, 'Patient ID', range(1, len(df) + 1))
     coefficients_np = [c.numpy().tolist() for c in coefficients]
+    _tbl_header = {
+        'backgroundColor': '#003087', 'color': 'white',
+        'fontWeight': '600', 'textAlign': 'center', 'fontSize': '12px'
+    }
+    _tbl_cell = {
+        'padding': '7px 10px', 'minWidth': '80px',
+        'whiteSpace': 'normal', 'fontSize': '12px',
+        'border': '1px solid #dee2e6'
+    }
+    _tbl_data_cond = [
+        {'if': {'row_index': 'odd'}, 'backgroundColor': '#f2f6fc'},
+        {'if': {'state': 'selected'},
+         'backgroundColor': '#d0e8ff', 'border': '1px solid #0067B1'},
+        {'if': {'state': 'active'},
+         'backgroundColor': '#cce0ff', 'border': '1px solid #0067B1'},
+    ]
+
     return html.Div([
-        html.H5(f"Predictions from: {filename}"),
         html.Div([
+            html.I(className="fas fa-table me-2 text-primary"),
+            html.Span(f"Predictions from: {filename}",
+                      style={"fontWeight": "600", "fontSize": "1rem"})
+        ], style={"marginBottom": "12px"}),
+
+        html.Div([
+            # Feature table
             html.Div([
+                html.P([html.I(className="fas fa-user-injured me-1 text-secondary"),
+                        " Patient Features"],
+                       style={"fontSize": "0.85rem", "fontWeight": "600",
+                              "color": "#6c757d", "marginBottom": "6px"}),
                 dash_table.DataTable(
                     id='x-table',
                     data=df_features.to_dict('records'),
                     columns=[{'name': col, 'id': col} for col in df_features.columns],
                     page_action='none',
-                    style_table={'height': 'auto', 'overflowX': 'auto'},
-                    style_cell={'minWidth': '80px', 'whiteSpace': 'normal'},
+                    style_table={'height': 'auto', 'overflowX': 'auto',
+                                 'borderRadius': '8px', 'overflow': 'hidden',
+                                 'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
+                    style_header=_tbl_header,
+                    style_cell=_tbl_cell,
+                    style_data_conditional=_tbl_data_cond,
                 )
-            ], style={
-                'height': '400px', 'overflowY': 'scroll', 'overflowX': 'auto',
-                'width': '60%', 'display': 'inline-block'
-            }),
+            ], className="tbl-left",
+               style={'height': '380px', 'overflowY': 'scroll', 'overflowX': 'auto'}),
+
+            # Predictions table
             html.Div([
+                html.P([html.I(className="fas fa-chart-bar me-1 text-primary"),
+                        " Cumulative Mortality"],
+                       style={"fontSize": "0.85rem", "fontWeight": "600",
+                              "color": "#6c757d", "marginBottom": "6px"}),
                 dash_table.DataTable(
                     data=pred_df.to_dict('records'),
-                    columns = [
+                    columns=[
                         {'name': col, 'id': col} if col == 'Patient ID'
-                        else {'name': col, 'id': col, 'type': 'numeric', 'format': Format(precision=5, scheme=Scheme.fixed)}
+                        else {'name': col, 'id': col, 'type': 'numeric',
+                              'format': Format(precision=5, scheme=Scheme.fixed)}
                         for col in pred_df.columns
                     ],
                     page_action='none',
-                    style_table={'height': 'auto', 'overflowX': 'auto'},
-                    style_cell={'minWidth': '100px', 'whiteSpace': 'normal'}
+                    style_table={'height': 'auto', 'overflowX': 'auto',
+                                 'borderRadius': '8px', 'overflow': 'hidden',
+                                 'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
+                    style_header=_tbl_header,
+                    style_cell={**_tbl_cell, 'minWidth': '100px'},
+                    style_data_conditional=_tbl_data_cond,
                 )
-            ], style={
-                'height': '400px', 'overflowY': 'scroll', 'overflowX': 'auto',
-                'width': '40%', 'display': 'inline-block'
-            })
-        ]),html.Br(),
-        dbc.Button("Download Predicted Mortality Table", id='download-mortality-button', color="primary", className="mt-2",style={"display": "none"}), dcc.Download(id="download-mortality-table-csv"),
-        html.Br(),html.Br(),
-        html.Div("Click on a row to view mortality plot, trajectories of risk factors, and important baseline variables at individual level for that patient."),
-        html.Hr()
-    ]), {'df_features': df.to_dict('records'), 'pred_df': pred_df.to_dict('records'), 'scaled_df': df_scaled.to_dict('records'), 'mask': mask.values.tolist(), 'coefficients': coefficients_np},  html.Span("🟢 Patients data is uploaded.", style={"color": "green"}), html.Span(f"{filename} uploaded ✔️", style={"color": "green"})
+            ], className="tbl-right",
+               style={'height': '380px', 'overflowY': 'scroll', 'overflowX': 'auto'})
+        ]),
+
+        html.Br(),
+        dbc.Button([
+            html.I(className="fas fa-download me-2"),
+            "Download Mortality Table"
+        ], id='download-mortality-button', color="outline-primary",
+           size="sm", className="mt-2", style={"display": "none",
+                                               "borderRadius": "6px"}),
+        dcc.Download(id="download-mortality-table-csv"),
+        html.Br(), html.Br(),
+        dbc.Alert([
+            html.I(className="fas fa-mouse-pointer me-2"),
+            "Click on a patient row to view the mortality curve, risk factor trajectories, and SHAP analysis."
+        ], color="info", className="py-2 px-3",
+           style={"fontSize": "0.85rem", "borderRadius": "8px"}),
+        html.Hr(style={"borderColor": "#dee2e6"})
+    ]), {'df_features': df.to_dict('records'), 'pred_df': pred_df.to_dict('records'), 'scaled_df': df_scaled.to_dict('records'), 'mask': mask.values.tolist(), 'coefficients': coefficients_np}, \
+        dbc.Badge([html.I(className="fas fa-check-circle me-1"), "Patients data uploaded"],
+                  color="success", className="mt-2 px-3 py-2 w-100 text-start"), \
+        dbc.Badge([html.I(className="fas fa-check-circle me-1"), f"{filename} uploaded"],
+                  color="success", className="px-3 py-2")
 
 @app.callback(
     Output('download-mortality-button', 'style'),
@@ -712,7 +999,11 @@ def plot_mortality(active_cell, alpha_value, memory, memory_calibration):
     x = list(range(1, len(y)+1))
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y, mode='lines+markers',name=f'Patient {i+1}'))
+    fig.add_trace(go.Scatter(
+        x=x, y=y, mode='lines+markers', name=f'Patient {i + 1}',
+        line=dict(color="#0067B1", width=2.5),
+        marker=dict(size=7, color="#0067B1", line=dict(color="white", width=1.5))
+    ))
 
     if plot_interval:
         data_calibration_scaled_with_mask = np.array(memory_calibration['data_calibration_scaled_with_mask'])
@@ -755,12 +1046,23 @@ def plot_mortality(active_cell, alpha_value, memory, memory_calibration):
         ])
         
 
-    fig.update_layout(title=f'Mortality Risk for Patient {i+1}',
-                      xaxis_title='Year',
-                      yaxis_title='Cumulative Mortality',
-                      template='plotly_white',
-                      xaxis=dict(tickmode='linear', dtick=1),
-                      yaxis=dict(range=[-0.01, 1.01]))
+    fig.update_layout(
+        title=dict(text=f'Cumulative Mortality Risk — Patient {i + 1}',
+                   font=dict(size=15, color="#003087", family="Segoe UI, Arial")),
+        xaxis_title='Year', yaxis_title='Cumulative Mortality',
+        template='plotly_white',
+        xaxis=dict(tickmode='linear', dtick=1, showgrid=True,
+                   gridcolor="#e8eef4", gridwidth=1),
+        yaxis=dict(range=[-0.01, 1.01], showgrid=True,
+                   gridcolor="#e8eef4", gridwidth=1,
+                   tickformat=".0%"),
+        plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
+        font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
+        legend=dict(bgcolor="rgba(255,255,255,0.85)",
+                    bordercolor="#dee2e6", borderwidth=1),
+        margin=dict(t=60, b=50, l=60, r=20),
+        hovermode="x unified",
+    )
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if plot_interval else None
 
 @app.callback(
@@ -808,22 +1110,45 @@ def show_shap(active_cell, memory):
 
 
     row_data = df_combined.iloc[i].to_dict()
+    _edit_tbl_hdr = {
+        'backgroundColor': '#003087', 'color': 'white',
+        'fontWeight': '600', 'textAlign': 'center', 'fontSize': '12px'
+    }
     table = dash_table.DataTable(
         id='editable-table',
         columns=[{'name': k, 'id': k, 'editable': True} for k in row_data],
         data=[row_data],
-        style_table={'overflowX': 'auto'},
-        style_cell={'minWidth': '80px', 'whiteSpace': 'normal'}
+        style_table={'overflowX': 'auto', 'borderRadius': '8px',
+                     'overflow': 'hidden', 'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
+        style_header=_edit_tbl_hdr,
+        style_cell={'padding': '7px 10px', 'minWidth': '80px',
+                    'whiteSpace': 'normal', 'fontSize': '12px',
+                    'border': '1px solid #dee2e6'},
+        style_data_conditional=[
+            {'if': {'row_index': 'odd'}, 'backgroundColor': '#f2f6fc'},
+        ],
     )
 
     return (
         html.Div([
-            html.H5(f"SHAP Waterfall Plot for Patient {i+1}"),
-            html.Img(src=img, style={'maxWidth': '100%', 'height': 'auto', 'border': '1px solid lightgray'}),
-            html.Br(),
-            html.Br(),
-            html.Div("You can edit the baseline variable values below and click 'Update Analysis' to see the updated results."),
-            html.Hr()
+            html.Div([
+                html.I(className="fas fa-water me-2 text-primary"),
+                html.Span(f"SHAP Waterfall — Patient {i + 1}",
+                          style={"fontWeight": "600", "fontSize": "1rem"})
+            ], style={"marginBottom": "10px"}),
+            html.Img(src=img, style={
+                'maxWidth': '100%', 'height': 'auto',
+                'border': '1px solid #dee2e6', 'borderRadius': '8px',
+                'boxShadow': '0 2px 8px rgba(0,0,0,.08)'
+            }),
+            html.Br(), html.Br(),
+            dbc.Alert([
+                html.I(className="fas fa-edit me-2"),
+                "Edit the baseline feature values below and click 'Update Analysis' to see the revised predictions."
+            ], color="light", className="py-2 px-3 border",
+               style={"fontSize": "0.85rem", "borderRadius": "8px",
+                      "borderColor": "#bee2ff !important"}),
+            html.Hr(style={"borderColor": "#dee2e6"})
         ]),
         table,
         i,
@@ -899,8 +1224,16 @@ def update_mortality(n_clicks, alpha_value,edited_data, index, current_mortality
     x = list(range(1, len(y)+1))
 
     fig = go.Figure()
-    fig.add_trace(go.Scatter(x=x, y=y_current, mode='lines+markers',name='Original',line=dict(color='blue')))
-    fig.add_trace(go.Scatter(x=x, y=y, mode='lines+markers',name='Updated',line=dict(color='red')))
+    fig.add_trace(go.Scatter(
+        x=x, y=y_current, mode='lines+markers', name='Original',
+        line=dict(color="#0067B1", width=2.5),
+        marker=dict(size=7, color="#0067B1", line=dict(color="white", width=1.5))
+    ))
+    fig.add_trace(go.Scatter(
+        x=x, y=y, mode='lines+markers', name='Updated',
+        line=dict(color="#C8102E", width=2.5),
+        marker=dict(size=7, color="#C8102E", line=dict(color="white", width=1.5))
+    ))
     
     if plot_interval:
         data_calibration_scaled_with_mask = np.array(memory_calibration['data_calibration_scaled_with_mask'])
@@ -972,12 +1305,23 @@ def update_mortality(n_clicks, alpha_value,edited_data, index, current_mortality
 
 
 
-    fig.update_layout(title=f'Updated Mortality Risk for Modified Patient {index+1}',
-                      xaxis_title='Year',
-                      yaxis_title='Cumulative Mortality',
-                      template='plotly_white',
-                      xaxis=dict(tickmode='linear', dtick=1),
-                      yaxis=dict(range=[-0.01, 1.01]))
+    fig.update_layout(
+        title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
+                   font=dict(size=15, color="#003087", family="Segoe UI, Arial")),
+        xaxis_title='Year', yaxis_title='Cumulative Mortality',
+        template='plotly_white',
+        xaxis=dict(tickmode='linear', dtick=1, showgrid=True,
+                   gridcolor="#e8eef4", gridwidth=1),
+        yaxis=dict(range=[-0.01, 1.01], showgrid=True,
+                   gridcolor="#e8eef4", gridwidth=1,
+                   tickformat=".0%"),
+        plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
+        font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
+        legend=dict(bgcolor="rgba(255,255,255,0.85)",
+                    bordercolor="#dee2e6", borderwidth=1),
+        margin=dict(t=60, b=50, l=60, r=20),
+        hovermode="x unified",
+    )
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], {'coefficients': coefficients_np} 
 
 @app.callback(
@@ -1028,9 +1372,17 @@ def update_shap(n_clicks, edited_data, memory, index, current_order):
     img,_= get_waterfall_base64(X_and_mask_eval, combined, 0, order=current_order)
 
     return html.Div([
-        html.H5(f"Updated SHAP Waterfall Plot for Modified Patient {index+1}"),
-        html.Img(src=img, style={'maxWidth': '100%', 'height': 'auto', 'border': '1px solid lightgray'}),
-        html.Hr()
+        html.Div([
+            html.I(className="fas fa-water me-2 text-danger"),
+            html.Span(f"Updated SHAP Waterfall — Modified Patient {index + 1}",
+                      style={"fontWeight": "600", "fontSize": "1rem", "color": "#C8102E"})
+        ], style={"marginBottom": "10px"}),
+        html.Img(src=img, style={
+            'maxWidth': '100%', 'height': 'auto',
+            'border': '1px solid #f5c2c7', 'borderRadius': '8px',
+            'boxShadow': '0 2px 8px rgba(230,57,70,.12)'
+        }),
+        html.Hr(style={"borderColor": "#dee2e6"})
     ])
 
 
