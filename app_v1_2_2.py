@@ -2386,7 +2386,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     margin_right = 8 if is_mobile else 20
     orig_curve_name = 'Original'
     upd_curve_name = 'Updated'
-    title_y = 0.995 if is_mobile else 0.98
+    title_y = 0.965 if is_mobile else 0.98
     
     x = list(range(1, len(y)+1))
 
@@ -2562,7 +2562,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     mobile_height = get_mobile_43_height(window_width) if is_mobile else 500
 
     fig.update_layout(
-        title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
+        title=dict(text=f'Updated Cumulative Mortality<br>Modified Patient {index + 1}',
                    font=dict(size=15, color="#003087", family="Segoe UI, Arial"),
                    y=title_y, x=0.5, xanchor='center', yanchor='top', pad=dict(t=2, b=0)),
         xaxis_title='Year',
