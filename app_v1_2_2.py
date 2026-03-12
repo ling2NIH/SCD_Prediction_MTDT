@@ -2337,8 +2337,22 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     plot_interval = bool(selected_method == 'conformal' and memory_calibration is not None)
     plot_mc = bool(selected_method == 'mc')
 
-    if not edited_data or index is None:
+    if index is None or memory_current is None:
         raise dash.exceptions.PreventUpdate
+
+    if not edited_data:
+        raise dash.exceptions.PreventUpdate
+
+    # Robust fallback: if current mortality store is not ready yet,
+    # rebuild baseline mortality from uploaded prediction memory.
+    if current_mortality is None:
+        try:
+            pred_df = pd.DataFrame(memory_current.get('pred_df', []))
+            if len(pred_df) > index:
+                row_vals = [v for k, v in pred_df.iloc[index].to_dict().items() if k != 'Patient ID']
+                current_mortality = row_vals
+        except Exception:
+            current_mortality = None
 
     df_raw = pd.DataFrame(edited_data)
     df_raw = df_raw.apply(pd.to_numeric, errors='coerce')
@@ -2360,10 +2374,14 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
 
     display_horizon = DEFAULT_MORTALITY_DISPLAY_HORIZON
     y = mortality[0, :display_horizon]
-    y_current = np.array(current_mortality)[:display_horizon]
+    if current_mortality is None:
+        y_current = np.zeros(display_horizon, dtype=np.float64)
+    else:
+        y_current = np.asarray(current_mortality, dtype=np.float64)[:display_horizon]
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
     legend_entry_width = 120 if is_mobile else None
+    show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     margin_left = 38 if is_mobile else 60
     margin_right = 8 if is_mobile else 20
