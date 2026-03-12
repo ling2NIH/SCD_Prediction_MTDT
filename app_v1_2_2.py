@@ -240,6 +240,8 @@ def create_trajectory_plot(
     height_per_row = 130 if is_mobile else 190
     fig_height = height_per_row * num_rows
     legend_font_size = 8 if is_mobile else 10
+    margin_left = 20 if is_mobile else 50
+    margin_right = 8 if is_mobile else 20
 
     # Nice palette
     COLOR_ORIGINAL = "#3B82F6"  # vivid blue
@@ -357,7 +359,7 @@ def create_trajectory_plot(
         plot_bgcolor="rgba(248,251,255,0.9)",
         paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=11, color="#444"),
-        margin=dict(t=105, b=50, l=50, r=20),
+        margin=dict(t=105, b=50, l=margin_left, r=margin_right),
         legend=dict(
             orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
             bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
@@ -1960,6 +1962,8 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     legend_font_size = 8 if is_mobile else 10
     yaxis_title_size = 10 if is_mobile else 12
     mortality_height = get_mobile_43_height(window_width) if is_mobile else 500
+    margin_left = 38 if is_mobile else 60
+    margin_right = 8 if is_mobile else 20
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -2068,19 +2072,19 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
                    gridcolor="#e8eef4", gridwidth=1),
         yaxis=dict(range=[-0.01, 1.01], showgrid=True,
                    gridcolor="#e8eef4", gridwidth=1,
-                   title=dict(text='Cumulative Mortality', font=dict(size=yaxis_title_size)),
+                   title=dict(text='Cumulative Mortality', font=dict(size=yaxis_title_size), standoff=2 if is_mobile else 8),
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
                     font=dict(size=legend_font_size), itemsizing="constant"),
-        margin=dict(t=105, b=70, l=60, r=20),
+        margin=dict(t=105, b=70, l=margin_left, r=margin_right),
         hovermode="x unified",
         height=mortality_height,
     )
     kpi_cards = create_kpi_cards(y, lower, upper)
-    return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if has_interval else None
+    return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False, 'responsive': True}, style={"width": "100%"}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if has_interval else None
 
 
 @app.callback(
@@ -2142,7 +2146,7 @@ def plot_trajectory(active_cell, alpha_value, memory, window_width, interval_met
         original_band=original_band,
         alpha=alpha_value,
     )
-    return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()]
+    return [dcc.Graph(figure=fig, config={'displayModeBar': False, 'responsive': True}, style={"width": "100%"}), html.Hr()]
 
 @app.callback(
     Output('shap-plot', 'children'),
@@ -2341,6 +2345,8 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
     yaxis_title_size = 10 if is_mobile else 12
+    margin_left = 38 if is_mobile else 60
+    margin_right = 8 if is_mobile else 20
     
     x = list(range(1, len(y)+1))
 
@@ -2524,14 +2530,14 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                    gridcolor="#e8eef4", gridwidth=1),
         yaxis=dict(range=[-0.01, 1.01], showgrid=True,
                    gridcolor="#e8eef4", gridwidth=1,
-                   title=dict(text='Cumulative Mortality', font=dict(size=yaxis_title_size)),
+                   title=dict(text='Cumulative Mortality', font=dict(size=yaxis_title_size), standoff=2 if is_mobile else 8),
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
                     font=dict(size=legend_font_size), itemsizing="constant"),
-        margin=dict(t=105, b=70, l=60, r=20),
+        margin=dict(t=105, b=70, l=margin_left, r=margin_right),
         hovermode="x unified",
         height=mobile_height
     )
@@ -2544,7 +2550,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         interval_lower = lower_upd.tolist()
         interval_upper = upper_upd.tolist()
     kpi_cards = create_kpi_cards(y, interval_lower, interval_upper, accent_color="#C8102E")
-    return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], {'coefficients': coefficients_np} 
+    return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False, 'responsive': True}, style={"width": "100%"}), html.Hr()], {'coefficients': coefficients_np} 
 
 
 @app.callback(
@@ -2633,7 +2639,7 @@ def update_plot_trajectory(memory_coefficients, alpha_value, memory, index, wind
         updated_band=updated_band,
         alpha=alpha_value,
     )
-    return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()]
+    return [dcc.Graph(figure=fig, config={'displayModeBar': False, 'responsive': True}, style={"width": "100%"}), html.Hr()]
 
 @app.callback(
     Output('shap-plot-updated', 'children'),
