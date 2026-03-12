@@ -1978,7 +1978,6 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     x = list(range(1, len(y)+1))
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
-    legend_entry_width = 120 if is_mobile else None
     show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     mortality_height = get_mobile_43_height(window_width) if is_mobile else 500
@@ -2098,8 +2097,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
-                    font=dict(size=legend_font_size), itemsizing="constant",
-                    entrywidth=legend_entry_width, entrywidthmode='pixels'),
+                    font=dict(size=legend_font_size), itemsizing="constant"),
         margin=dict(t=105, b=70, l=margin_left, r=margin_right),
         hovermode="x unified",
         height=mortality_height,
