@@ -1249,7 +1249,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                      children=dcc.Loading(id='loading-mortality', type='dot',
                                                           custom_spinner=html.Div([
                                                               dbc.Spinner(size="sm", color="primary"),
-                                                              html.Span("Computing mortality curve...", style={"color": "#0067B1", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                              html.Span("Computing mortality curve... ETA ~15s", style={"color": "#0067B1", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                           ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                           children=html.Div(id='mortality-plot'))),
                             html.Div(
@@ -1278,7 +1278,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 children=dcc.Loading(id='loading-update_mortality', type='dot',
                                                      custom_spinner=html.Div([
                                                          dbc.Spinner(size="sm", color="danger"),
-                                                         html.Span("Updating mortality analysis...", style={"color": "#C8102E", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                         html.Span("Updating mortality analysis... ETA ~15s", style={"color": "#C8102E", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                      ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                      children=html.Div(id='mortality-plot-updated'))
                             ),
@@ -1304,7 +1304,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                      children=dcc.Loading(id='loading-trajectory', type='dot',
                                                           custom_spinner=html.Div([
                                                               dbc.Spinner(size="sm", color="success"),
-                                                              html.Span("Generating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                              html.Span("Generating risk factor trajectories... ETA ~15s", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                           ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                           children=html.Div(id='trajectory-plot'))),
                             html.Div(
@@ -1313,7 +1313,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 children=dcc.Loading(id='loading-update_trajectory', type='dot',
                                                      custom_spinner=html.Div([
                                                          dbc.Spinner(size="sm", color="success"),
-                                                         html.Span("Updating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                         html.Span("Updating risk factor trajectories... ETA ~15s", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                      ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                      children=html.Div(id='trajectory-plot-updated'))
                             ),
@@ -1331,7 +1331,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                             dcc.Loading(id='loading-shap', type='dot',
                                         custom_spinner=html.Div([
                                             dbc.Spinner(size="sm", color="warning"),
-                                            html.Span("Computing SHAP feature importance...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                            html.Span("Computing SHAP feature importance... ETA ~15s", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                         ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                         children=html.Div(id='shap-plot')),
 
@@ -1342,7 +1342,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 children=dcc.Loading(id='loading-update', type='dot',
                                                      custom_spinner=html.Div([
                                                          dbc.Spinner(size="sm", color="warning"),
-                                                         html.Span("Updating SHAP analysis...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                         html.Span("Updating SHAP analysis... ETA ~15s", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                      ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                      children=html.Div(id='shap-plot-updated', className="mt-3"))
                             ),
@@ -1647,20 +1647,20 @@ def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, inter
     if triggered_id in ['x-table', 'update-shap-button'] and selected_method == 'mc':
         mc_progress['trigger_ts'] = time.time() * 1000.0
         return (
-            {"marginTop": "8px", "display": "block"},
-            0, '', 'Simultaneous uncertainty band — preparing...', 'Waiting for worker...',
-            {"marginTop": "8px", "display": "block"},
-            0, '', 'Simultaneous uncertainty band — preparing...', 'Waiting for worker...',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
             False
         )
 
     # If triggered by mc-trigger-store, enable interval and show progress
     if triggered_id == 'mc-trigger-store':
         return (
-            {"marginTop": "8px", "display": "block"},
-            0, '', 'Simultaneous uncertainty band — preparing...', 'Waiting for worker...',
-            {"marginTop": "8px", "display": "block"},
-            0, '', 'Simultaneous uncertainty band — preparing...', 'Waiting for worker...',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
             False
         )
     # Polled by interval
@@ -1678,8 +1678,8 @@ def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, inter
             is_recent_trigger = False
         if is_recent_trigger:
             return (
-                {"marginTop": "8px", "display": "block"}, 0, '', 'Simultaneous uncertainty band — preparing...', 'Waiting for worker...',
-                {"marginTop": "8px", "display": "block"}, 0, '', 'Simultaneous uncertainty band — preparing...', 'Waiting for worker...',
+                {"marginTop": "8px", "display": "none"}, 0, '', '', '',
+                {"marginTop": "8px", "display": "none"}, 0, '', '', '',
                 False
             )
         return (
