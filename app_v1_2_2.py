@@ -113,6 +113,23 @@ DEFAULT_LONG_HORIZON_GAMMA = 0
 DEFAULT_LONG_HORIZON_START_YEAR = 1
 DEFAULT_MORTALITY_DISPLAY_HORIZON = 10
 
+ALPHA_MARKS_DESKTOP = {
+    0.01: '99%',
+    0.05: '95%',
+    0.1: '90%',
+    0.2: '80%',
+    0.3: '70%',
+    0.5: '50%'
+}
+
+ALPHA_MARKS_MOBILE = {
+    0.01: '99%',
+    0.1: '90%',
+    0.2: '80%',
+    0.3: '70%',
+    0.5: '50%'
+}
+
 #######################refine utility functions for the app ###########################
 
 def create_kpi_cards(mortality_values, lower_bounds=None, upper_bounds=None, accent_color="#0067B1"):
@@ -255,7 +272,7 @@ def create_trajectory_plot(
                     fillcolor='rgba(59,130,246,0.16)',
                     line=dict(color='rgba(255,255,255,0)'),
                     hoverinfo='skip',
-                    name=f"Original simultaneous uncertainty band {int((1-alpha)*100)}%",
+                        name=f"Orig band {int((1-alpha)*100)}%",
                     showlegend=(var_idx == 0),
                 ),
                 row=row, col=col
@@ -293,7 +310,7 @@ def create_trajectory_plot(
                         fillcolor='rgba(249,115,22,0.16)',
                         line=dict(color='rgba(255,255,255,0)'),
                         hoverinfo='skip',
-                        name=f"Updated simultaneous uncertainty band {int((1-alpha)*100)}%",
+                        name=f"Upd band {int((1-alpha)*100)}%",
                         showlegend=(var_idx == 0),
                     ),
                     row=row, col=col
@@ -318,18 +335,24 @@ def create_trajectory_plot(
         if col == 1:
             fig.update_yaxes(title_text="Values", title_font=dict(size=10), title_standoff=2, row=row, col=col)
 
+    trajectory_title = (
+        f"Predicted 3-Year Trajectories of Risk Factors<br>Patient {person_id + 1}"
+        if is_mobile
+        else f"Predicted 3-Year Trajectories of Risk Factors — Patient {person_id + 1}"
+    )
+
     fig.update_layout(
         height=fig_height,
-        title_text=f"Predicted 3-Year Trajectories of Risk Factors — Patient {person_id + 1}",
+        title_text=trajectory_title,
         title_font=dict(size=15, color="#003087", family="Segoe UI, Arial"),
         template='plotly_white',
         plot_bgcolor="rgba(248,251,255,0.9)",
         paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=11, color="#444"),
-        margin=dict(t=80, b=50, l=50, r=20),
+        margin=dict(t=105, b=50, l=50, r=20),
         legend=dict(
-            orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-            bgcolor="rgba(255,255,255,0.85)", bordercolor="#dee2e6", borderwidth=1,
+            orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
+            bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
             font=dict(size=legend_font_size), itemsizing="constant"
         ),
     )
@@ -905,7 +928,8 @@ app.index_string = """
 
         .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
         .kpi-card { padding: 10px 12px; }
-        .kpi-value { font-size: 1rem; }
+        .kpi-label { font-size: 9px; }
+        .kpi-value { font-size: 0.9rem; }
 
         /* main panel body padding */
         #main-results-body { padding: 12px !important; }
@@ -1192,8 +1216,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                     ], style={"fontWeight": "600", "marginBottom": "6px"}),
                                     dcc.Slider(
                                         id='alpha-slider', min=0.01, max=0.5, step=0.01, value=0.05,
-                                        marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
-                                               0.2: '80%', 0.3: '70%', 0.5: '50%'},
+                                        marks=ALPHA_MARKS_DESKTOP,
                                         tooltip={"placement": "bottom", "always_visible": False}
                                     )
                                 ],
@@ -1228,8 +1251,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                     ], style={"fontWeight": "600", "marginBottom": "6px"}),
                                     dcc.Slider(
                                         id='alpha-slider-updated', min=0.01, max=0.5, step=0.01, value=0.05,
-                                        marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
-                                               0.2: '80%', 0.3: '70%', 0.5: '50%'},
+                                        marks=ALPHA_MARKS_DESKTOP,
                                         tooltip={"placement": "bottom", "always_visible": False}
                                     )
                                 ],
@@ -1240,7 +1262,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                          "border": "1px solid rgba(244,210,210,.95)",
                                          "boxShadow": "0 6px 18px rgba(122,40,40,.05)"}
                             ),
-                            dcc.Loading(id='loading-update_mortality', type='dot',
+                            dcc.Loading(id='loading-update_mortality', type='dot', style={"display": "none"},
                                         custom_spinner=html.Div([
                                             dbc.Spinner(size="sm", color="danger"),
                                             html.Span("Updating mortality analysis...", style={"color": "#C8102E", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
@@ -1271,7 +1293,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                                               html.Span("Generating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                           ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                           children=html.Div(id='trajectory-plot'))),
-                            dcc.Loading(id='loading-update_trajectory', type='dot',
+                            dcc.Loading(id='loading-update_trajectory', type='dot', style={"display": "none"},
                                         custom_spinner=html.Div([
                                             dbc.Spinner(size="sm", color="success"),
                                             html.Span("Updating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
@@ -1296,7 +1318,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                         children=html.Div(id='shap-plot')),
 
                             # 2. Updated SHAP (appears after Update Analysis)
-                            dcc.Loading(id='loading-update', type='dot',
+                            dcc.Loading(id='loading-update', type='dot', style={"display": "none"},
                                         custom_spinner=html.Div([
                                             dbc.Spinner(size="sm", color="warning"),
                                             html.Span("Updating SHAP analysis...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
@@ -1588,12 +1610,28 @@ app.clientside_callback(
     Output('mc-progress-interval', 'disabled'),
     Input('mc-progress-interval', 'n_intervals'),
     Input('mc-trigger-store', 'data'),
+    Input('x-table', 'active_cell'),
+    Input('update-shap-button', 'n_clicks'),
+    State('interval-method-selector', 'value'),
     prevent_initial_call=True
 )
-def update_mc_progress(n_intervals, trigger):
+def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, interval_method):
     from dash import ctx
+    triggered_id = ctx.triggered_id
+
+    # Robust start signal (mobile-friendly): directly react to row click/update click
+    # when MC mode is active.
+    if triggered_id in ['x-table', 'update-shap-button'] and interval_method == 'mc':
+        return (
+            {"marginTop": "8px", "display": "block"},
+            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
+            {"marginTop": "8px", "display": "block"},
+            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
+            False
+        )
+
     # If triggered by mc-trigger-store, enable interval and show progress
-    if ctx.triggered_id == 'mc-trigger-store':
+    if triggered_id == 'mc-trigger-store':
         return (
             {"marginTop": "8px", "display": "block"},
             0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
@@ -1913,7 +1951,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
     yaxis_title_size = 10 if is_mobile else 12
-    mortality_height = 270 if is_mobile else 360
+    mortality_height = 400 if is_mobile else 500
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -1961,7 +1999,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"{int((1 - alpha_value) * 100)}% Conformal Interval"
+                name=f"Conf int {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -1994,11 +2032,11 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f'Simultaneous uncertainty band {int((1-alpha_value)*100)}%'
+                name=f'Band {int((1-alpha_value)*100)}%'
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, hoverinfo='skip', name='Band Upper'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, hoverinfo='skip', name='Band Lower'),
-            go.Scatter(x=x, y=mc_mean_vals, mode='lines+markers', name='Band Mean',
+            go.Scatter(x=x, y=mc_mean_vals, mode='lines+markers', name='Mean',
                        line=dict(color='rgba(40, 167, 69, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(40, 167, 69, 0.8)'),
                        visible='legendonly')
@@ -2026,10 +2064,10 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
-        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
-                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
+                    bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
                     font=dict(size=legend_font_size), itemsizing="constant"),
-        margin=dict(t=60, b=95, l=60, r=20),
+        margin=dict(t=105, b=70, l=60, r=20),
         hovermode="x unified",
         height=mortality_height,
     )
@@ -2366,7 +2404,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Original {int((1 - alpha_value) * 100)}% Interval"
+                name=f"Orig int {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2381,7 +2419,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Updated {int((1 - alpha_value) * 100)}% Interval"
+                name=f"Upd int {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2408,11 +2446,11 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Original simultaneous uncertainty band {int((1 - alpha_value) * 100)}%"
+                name=f"Orig band {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
-            go.Scatter(x=x, y=mc_mean_orig.tolist(), mode='lines+markers', name='Original band mean',
+            go.Scatter(x=x, y=mc_mean_orig.tolist(), mode='lines+markers', name='Orig mean',
                        line=dict(color='rgba(0, 123, 255, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(0, 123, 255, 0.8)'),
                        visible='legendonly')
@@ -2433,11 +2471,11 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Updated simultaneous uncertainty band {int((1 - alpha_value) * 100)}%"
+                name=f"Upd band {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
-            go.Scatter(x=x, y=mc_mean_upd.tolist(), mode='lines+markers', name='Updated band mean',
+            go.Scatter(x=x, y=mc_mean_upd.tolist(), mode='lines+markers', name='Upd mean',
                        line=dict(color='rgba(255, 0, 0, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(255, 0, 0, 0.8)'),
                        visible='legendonly')
@@ -2466,8 +2504,8 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     else:
         fig.data[1].hovertemplate = "%{y:.2f}<extra>%{fullData.name}</extra>"
 
-    # 手机端高度调整（进一步缩小）
-    mobile_height = 270 if is_mobile else 360
+    
+    mobile_height = 400 if is_mobile else 500
 
     fig.update_layout(
         title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
@@ -2482,10 +2520,10 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
-        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
-                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
+                    bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
                     font=dict(size=legend_font_size), itemsizing="constant"),
-        margin=dict(t=60, b=95, l=60, r=20),
+        margin=dict(t=105, b=70, l=60, r=20),
         hovermode="x unified",
         height=mobile_height
     )
@@ -2753,6 +2791,19 @@ def toggle_updated_plots_visibility(n_clicks, active_cell):
     return {"display": "none"}, {"display": "none"}, {"display": "none"}
 
 
+@app.callback(
+    Output('loading-update_mortality', 'style'),
+    Output('loading-update_trajectory', 'style'),
+    Output('loading-update', 'style'),
+    Input('update-ran', 'data'),
+    prevent_initial_call=True
+)
+def toggle_updated_loading_blocks(update_ran):
+    if update_ran:
+        return {"display": "block"}, {"display": "block"}, {"display": "block"}
+    return {"display": "none"}, {"display": "none"}, {"display": "none"}
+
+
 # ── Feature search: filter editable-table columns by name ────────────────────
 @app.callback(
     Output('editable-table', 'columns'),
@@ -2773,6 +2824,18 @@ def search_feature_columns(search, clear_clicks, row_data):
         return all_cols, dash.no_update
     filtered = [c for c in all_cols if search.strip().lower() in c['name'].lower()]
     return (filtered if filtered else all_cols), dash.no_update
+
+
+@app.callback(
+    Output('alpha-slider', 'marks'),
+    Output('alpha-slider-updated', 'marks'),
+    Input('window-width-store', 'data'),
+    prevent_initial_call=False
+)
+def update_alpha_slider_marks(window_width):
+    is_mobile = window_width is not None and window_width < 768
+    marks = ALPHA_MARKS_MOBILE if is_mobile else ALPHA_MARKS_DESKTOP
+    return marks, marks
 
 
 # Capture browser window width once on page load
