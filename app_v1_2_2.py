@@ -86,7 +86,7 @@ with open("./utils/saved_explainers/explainer_v2.14.2.dill","rb") as f:
 explainer.model.f.__globals__['model'] = model
 
 # Global simultaneous uncertainty band progress tracking
-mc_progress = {'current': 0, 'total': 0, 'running': False, 'eta': '', 'label': ''}
+mc_progress = {'current': 0, 'total': 0, 'running': False, 'eta': '', 'label': '', 'trigger_ts': 0.0}
 
 # Long-horizon risk-support table for mortality simultaneous uncertainty band
 # t is in years.
@@ -1272,12 +1272,16 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                          "border": "1px solid rgba(244,210,210,.95)",
                                          "boxShadow": "0 6px 18px rgba(122,40,40,.05)"}
                             ),
-                            dcc.Loading(id='loading-update_mortality', type='dot', style={"display": "none"},
-                                        custom_spinner=html.Div([
-                                            dbc.Spinner(size="sm", color="danger"),
-                                            html.Span("Updating mortality analysis...", style={"color": "#C8102E", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
-                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
-                                        children=html.Div(id='mortality-plot-updated')),
+                            html.Div(
+                                id='wrap-loading-update-mortality',
+                                style={"display": "none"},
+                                children=dcc.Loading(id='loading-update_mortality', type='dot',
+                                                     custom_spinner=html.Div([
+                                                         dbc.Spinner(size="sm", color="danger"),
+                                                         html.Span("Updating mortality analysis...", style={"color": "#C8102E", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                     ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
+                                                     children=html.Div(id='mortality-plot-updated'))
+                            ),
                         ],
                             title=html.Span([
                                 html.I(className="fas fa-heartbeat me-2"),
@@ -1303,12 +1307,16 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                                               html.Span("Generating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
                                                           ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                           children=html.Div(id='trajectory-plot'))),
-                            dcc.Loading(id='loading-update_trajectory', type='dot', style={"display": "none"},
-                                        custom_spinner=html.Div([
-                                            dbc.Spinner(size="sm", color="success"),
-                                            html.Span("Updating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
-                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
-                                        children=html.Div(id='trajectory-plot-updated')),
+                            html.Div(
+                                id='wrap-loading-update-trajectory',
+                                style={"display": "none"},
+                                children=dcc.Loading(id='loading-update_trajectory', type='dot',
+                                                     custom_spinner=html.Div([
+                                                         dbc.Spinner(size="sm", color="success"),
+                                                         html.Span("Updating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                     ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
+                                                     children=html.Div(id='trajectory-plot-updated'))
+                            ),
                         ],
                             title=html.Span([
                                 html.I(className="fas fa-chart-line me-2"),
@@ -1328,12 +1336,16 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                         children=html.Div(id='shap-plot')),
 
                             # 2. Updated SHAP (appears after Update Analysis)
-                            dcc.Loading(id='loading-update', type='dot', style={"display": "none"},
-                                        custom_spinner=html.Div([
-                                            dbc.Spinner(size="sm", color="warning"),
-                                            html.Span("Updating SHAP analysis...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
-                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
-                                        children=html.Div(id='shap-plot-updated', className="mt-3")),
+                            html.Div(
+                                id='wrap-loading-update-shap',
+                                style={"display": "none"},
+                                children=dcc.Loading(id='loading-update', type='dot',
+                                                     custom_spinner=html.Div([
+                                                         dbc.Spinner(size="sm", color="warning"),
+                                                         html.Span("Updating SHAP analysis...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                     ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
+                                                     children=html.Div(id='shap-plot-updated', className="mt-3"))
+                            ),
 
                             # hint — visible above the button
                             html.Div([
@@ -1628,25 +1640,27 @@ app.clientside_callback(
 def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, interval_method):
     from dash import ctx
     triggered_id = ctx.triggered_id
+    selected_method = interval_method or 'mc'
 
     # Robust start signal (mobile-friendly): directly react to row click/update click
     # when MC mode is active.
-    if triggered_id in ['x-table', 'update-shap-button'] and interval_method == 'mc':
+    if triggered_id in ['x-table', 'update-shap-button'] and selected_method == 'mc':
+        mc_progress['trigger_ts'] = time.time() * 1000.0
         return (
-            {"marginTop": "8px", "display": "block"},
-            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
-            {"marginTop": "8px", "display": "block"},
-            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
             False
         )
 
     # If triggered by mc-trigger-store, enable interval and show progress
     if triggered_id == 'mc-trigger-store':
         return (
-            {"marginTop": "8px", "display": "block"},
-            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
-            {"marginTop": "8px", "display": "block"},
-            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
+            {"marginTop": "8px", "display": "none"},
+            0, '', '', '',
             False
         )
     # Polled by interval
@@ -1654,14 +1668,18 @@ def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, inter
         # Avoid race condition on update: keep polling briefly after trigger
         # so progress bar does not disappear before long MC jobs actually start.
         try:
-            is_recent_trigger = trigger is not None and (time.time() * 1000 - float(trigger) < 15000)
+            now_ms = time.time() * 1000.0
+            trigger_ts = float(trigger) if trigger is not None else 0.0
+            server_ts = float(mc_progress.get('trigger_ts', 0.0))
+            recent_client = trigger_ts > 0 and (now_ms - trigger_ts < 15000)
+            recent_server = server_ts > 0 and (now_ms - server_ts < 15000)
+            is_recent_trigger = bool(recent_client or recent_server)
         except Exception:
             is_recent_trigger = False
         if is_recent_trigger:
-            waiting_title = "Simultaneous uncertainty band — preparing..."
             return (
-                {"marginTop": "8px", "display": "block"}, 0, '0/1000', waiting_title, '',
-                {"marginTop": "8px", "display": "block"}, 0, '0/1000', waiting_title, '',
+                {"marginTop": "8px", "display": "none"}, 0, '', '', '',
+                {"marginTop": "8px", "display": "none"}, 0, '', '', '',
                 False
             )
         return (
@@ -2806,19 +2824,16 @@ def toggle_updated_plots_visibility(n_clicks, active_cell):
 
 
 @app.callback(
-    Output('loading-update_mortality', 'style'),
-    Output('loading-update_trajectory', 'style'),
-    Output('loading-update', 'style'),
-    Input('update-ran', 'data'),
+    Output('wrap-loading-update-mortality', 'style'),
+    Output('wrap-loading-update-trajectory', 'style'),
+    Output('wrap-loading-update-shap', 'style'),
+    Input('update-shap-button', 'n_clicks'),
     Input('x-table', 'active_cell'),
-    prevent_initial_call=False
+    prevent_initial_call=True
 )
-def toggle_updated_loading_blocks(update_ran, active_cell):
+def toggle_updated_loading_blocks(n_clicks, active_cell):
     from dash import ctx
-    # Always hide updated spinners when selecting/switching patient rows.
-    if ctx.triggered_id == 'x-table':
-        return {"display": "none"}, {"display": "none"}, {"display": "none"}
-    if update_ran:
+    if ctx.triggered_id == 'update-shap-button' and n_clicks:
         return {"display": "block"}, {"display": "block"}, {"display": "block"}
     return {"display": "none"}, {"display": "none"}, {"display": "none"}
 
