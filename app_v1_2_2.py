@@ -1648,9 +1648,9 @@ def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, inter
         mc_progress['trigger_ts'] = time.time() * 1000.0
         return (
             {"marginTop": "8px", "display": "block"},
-            2, '0/1000', 'Simultaneous uncertainty band — preparing...', '',
+            25, 'Running...', 'Simultaneous uncertainty band — preparing...', '',
             {"marginTop": "8px", "display": "block"},
-            2, '0/1000', 'Simultaneous uncertainty band — preparing...', '',
+            25, 'Running...', 'Simultaneous uncertainty band — preparing...', '',
             False
         )
 
@@ -1658,9 +1658,9 @@ def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, inter
     if triggered_id == 'mc-trigger-store':
         return (
             {"marginTop": "8px", "display": "block"},
-            2, '0/1000', 'Simultaneous uncertainty band — preparing...', '',
+            25, 'Running...', 'Simultaneous uncertainty band — preparing...', '',
             {"marginTop": "8px", "display": "block"},
-            2, '0/1000', 'Simultaneous uncertainty band — preparing...', '',
+            25, 'Running...', 'Simultaneous uncertainty band — preparing...', '',
             False
         )
     # Polled by interval
@@ -1678,8 +1678,8 @@ def update_mc_progress(n_intervals, trigger, active_cell, n_update_clicks, inter
             is_recent_trigger = False
         if is_recent_trigger:
             return (
-                {"marginTop": "8px", "display": "block"}, 2, '0/1000', 'Simultaneous uncertainty band — preparing...', '',
-                {"marginTop": "8px", "display": "block"}, 2, '0/1000', 'Simultaneous uncertainty band — preparing...', '',
+                {"marginTop": "8px", "display": "block"}, 25, 'Running...', 'Simultaneous uncertainty band — preparing...', '',
+                {"marginTop": "8px", "display": "block"}, 25, 'Running...', 'Simultaneous uncertainty band — preparing...', '',
                 False
             )
         return (
