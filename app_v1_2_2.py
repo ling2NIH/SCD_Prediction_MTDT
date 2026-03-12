@@ -2382,13 +2382,15 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         y_current = np.asarray(current_mortality, dtype=np.float64)[:display_horizon]
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
-    legend_entry_width = 95 if is_mobile else None
+    legend_entry_width = 70 if is_mobile else None
     show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     margin_left = 38 if is_mobile else 60
     margin_right = 8 if is_mobile else 20
-    orig_curve_name = 'Orig' if is_mobile else 'Original'
-    upd_curve_name = 'Upd' if is_mobile else 'Updated'
+    legend_x = 0.0 if is_mobile else 0.5
+    legend_xanchor = 'left' if is_mobile else 'center'
+    orig_curve_name = 'O' if is_mobile else 'Original'
+    upd_curve_name = 'U' if is_mobile else 'Updated'
     
     x = list(range(1, len(y)+1))
 
@@ -2460,7 +2462,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Orig int {int((1 - alpha_value) * 100)}%" if not is_mobile else f"Orig int"
+                name=f"Orig int {int((1 - alpha_value) * 100)}%" if not is_mobile else "O int"
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2475,7 +2477,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Upd int {int((1 - alpha_value) * 100)}%" if not is_mobile else f"Upd int"
+                name=f"Upd int {int((1 - alpha_value) * 100)}%" if not is_mobile else "U int"
             ),
             go.Scatter(x=x, y=upper_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2502,7 +2504,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Orig band {int((1 - alpha_value) * 100)}%" if not is_mobile else "Orig band"
+                name=f"Orig band {int((1 - alpha_value) * 100)}%" if not is_mobile else "O band"
             ),
             go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
@@ -2527,7 +2529,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Upd band {int((1 - alpha_value) * 100)}%" if not is_mobile else "Upd band"
+                name=f"Upd band {int((1 - alpha_value) * 100)}%" if not is_mobile else "U band"
             ),
             go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
@@ -2576,7 +2578,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor=legend_xanchor, x=legend_x,
                     bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
                     font=dict(size=legend_font_size), itemsizing="constant",
                     entrywidth=legend_entry_width, entrywidthmode='pixels'),
