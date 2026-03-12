@@ -2071,7 +2071,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
             go.Scatter(x=x, y=mc_mean_vals, mode='lines+markers', name='Mean',
                        line=dict(color='rgba(40, 167, 69, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(40, 167, 69, 0.8)'),
-                       visible='legendonly')
+                       visible='legendonly', showlegend=show_mean_legend)
         ])
 
     if lower is not None and upper is not None:
