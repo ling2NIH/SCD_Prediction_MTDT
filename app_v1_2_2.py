@@ -2386,7 +2386,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     margin_right = 8 if is_mobile else 20
     orig_curve_name = 'Original'
     upd_curve_name = 'Updated'
-    title_y = 0.965 if is_mobile else 0.98
+    title_y = 0.9 if is_mobile else 0.98
     
     x = list(range(1, len(y)+1))
 
