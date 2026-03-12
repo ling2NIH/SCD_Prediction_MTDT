@@ -1979,6 +1979,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
     legend_entry_width = 120 if is_mobile else None
+    show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     mortality_height = get_mobile_43_height(window_width) if is_mobile else 500
     margin_left = 38 if is_mobile else 60
@@ -2488,7 +2489,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
             go.Scatter(x=x, y=mc_mean_orig.tolist(), mode='lines+markers', name='Orig mean',
                        line=dict(color='rgba(0, 123, 255, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(0, 123, 255, 0.8)'),
-                       visible='legendonly')
+                       visible='legendonly', showlegend=show_mean_legend)
         ])
 
         # Simultaneous uncertainty band for updated patient
@@ -2513,7 +2514,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
             go.Scatter(x=x, y=mc_mean_upd.tolist(), mode='lines+markers', name='Upd mean',
                        line=dict(color='rgba(255, 0, 0, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(255, 0, 0, 0.8)'),
-                       visible='legendonly')
+                       visible='legendonly', showlegend=show_mean_legend)
         ])
 
         orig_lower = lower_orig.tolist()
