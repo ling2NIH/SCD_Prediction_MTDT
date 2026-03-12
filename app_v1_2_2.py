@@ -214,6 +214,7 @@ def create_trajectory_plot(
     is_mobile = window_width is not None and window_width < 768
     height_per_row = 130 if is_mobile else 190
     fig_height = height_per_row * num_rows
+    legend_font_size = 8 if is_mobile else 10
 
     # Nice palette
     COLOR_ORIGINAL = "#3B82F6"  # vivid blue
@@ -329,7 +330,7 @@ def create_trajectory_plot(
         legend=dict(
             orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
             bgcolor="rgba(255,255,255,0.85)", bordercolor="#dee2e6", borderwidth=1,
-            font=dict(size=10), itemsizing="constant"
+            font=dict(size=legend_font_size), itemsizing="constant"
         ),
     )
     fig.update_annotations(font=dict(size=10, color="#555"))
@@ -1909,6 +1910,10 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     display_horizon = DEFAULT_MORTALITY_DISPLAY_HORIZON
     y = mortality[i, :display_horizon]
     x = list(range(1, len(y)+1))
+    is_mobile = window_width is not None and window_width < 768
+    legend_font_size = 8 if is_mobile else 10
+    yaxis_title_size = 10 if is_mobile else 12
+    mortality_height = 270 if is_mobile else 360
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -2011,21 +2016,22 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     fig.update_layout(
         title=dict(text=f'Cumulative Mortality Risk — Patient {i + 1}',
                    font=dict(size=15, color="#003087", family="Segoe UI, Arial")),
-        xaxis_title='Year', yaxis_title='Cumulative Mortality',
+        xaxis_title='Year',
         template='plotly_white',
         xaxis=dict(tickmode='linear', dtick=1, showgrid=True,
                    gridcolor="#e8eef4", gridwidth=1),
         yaxis=dict(range=[-0.01, 1.01], showgrid=True,
                    gridcolor="#e8eef4", gridwidth=1,
+                   title=dict(text='Cumulative Mortality', font=dict(size=yaxis_title_size)),
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
                     bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1,
-                    font=dict(size=10), itemsizing="constant"),
+                    font=dict(size=legend_font_size), itemsizing="constant"),
         margin=dict(t=60, b=95, l=60, r=20),
         hovermode="x unified",
-        height=240 if (window_width is not None and window_width < 768) else 360,
+        height=mortality_height,
     )
     kpi_cards = create_kpi_cards(y, lower, upper)
     return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if has_interval else None
@@ -2237,9 +2243,24 @@ def toggle_slider_visibility_updated(n_clicks, calib_data, interval_method, inde
     State('interval-method-selector', 'value'),
     State('memory-predictions', 'data'),
     State('window-width-store', 'data'),
+    State('update-ran', 'data'),
     prevent_initial_call=True
 )
-def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, index, current_mortality, interval_method, memory_current, window_width):
+def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, index, current_mortality, interval_method, memory_current, window_width, update_ran):
+    from dash import ctx
+
+    trigger = ctx.triggered_id
+    # Avoid showing "Updating mortality..." when user just switches patients.
+    # Only run after update is executed, or when adjusting updated alpha afterwards.
+    if trigger == 'update-shap-button':
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+    elif trigger in ['alpha-slider-updated', 'memory-calibration']:
+        if not update_ran:
+            raise dash.exceptions.PreventUpdate
+    else:
+        raise dash.exceptions.PreventUpdate
+
     alpha_value = 0.05 if alpha_value is None else float(alpha_value)
     alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
 
@@ -2271,6 +2292,9 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     display_horizon = DEFAULT_MORTALITY_DISPLAY_HORIZON
     y = mortality[0, :display_horizon]
     y_current = np.array(current_mortality)[:display_horizon]
+    is_mobile = window_width is not None and window_width < 768
+    legend_font_size = 8 if is_mobile else 10
+    yaxis_title_size = 10 if is_mobile else 12
     
     x = list(range(1, len(y)+1))
 
@@ -2443,23 +2467,24 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         fig.data[1].hovertemplate = "%{y:.2f}<extra>%{fullData.name}</extra>"
 
     # 手机端高度调整（进一步缩小）
-    mobile_height = 240 if (window_width is not None and window_width < 768) else 360
+    mobile_height = 270 if is_mobile else 360
 
     fig.update_layout(
         title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
                    font=dict(size=15, color="#003087", family="Segoe UI, Arial")),
-        xaxis_title='Year', yaxis_title='Cumulative Mortality',
+        xaxis_title='Year',
         template='plotly_white',
         xaxis=dict(tickmode='linear', dtick=1, showgrid=True,
                    gridcolor="#e8eef4", gridwidth=1),
         yaxis=dict(range=[-0.01, 1.01], showgrid=True,
                    gridcolor="#e8eef4", gridwidth=1,
+                   title=dict(text='Cumulative Mortality', font=dict(size=yaxis_title_size)),
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
                     bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1,
-                    font=dict(size=10), itemsizing="constant"),
+                    font=dict(size=legend_font_size), itemsizing="constant"),
         margin=dict(t=60, b=95, l=60, r=20),
         hovermode="x unified",
         height=mobile_height
