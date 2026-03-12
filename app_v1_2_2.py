@@ -10,6 +10,7 @@ import math
 import os
 import io
 import base64
+import time
 import dill
 import matplotlib.pyplot as plt
 from utils.model import *
@@ -84,35 +85,82 @@ with open("./utils/saved_explainers/explainer_v2.14.2.dill","rb") as f:
     explainer = dill.load(f)
 explainer.model.f.__globals__['model'] = model
 
+# Global MC Dropout progress tracking
+mc_progress = {'current': 0, 'total': 0, 'running': False, 'eta': '', 'label': ''}
+
 #######################refine utility functions for the app ###########################
 
-def create_trajectory_plot(person_id,coeffcients,updated_coeffcients=None):
+def create_kpi_cards(mortality_values, lower_bounds=None, upper_bounds=None, accent_color="#0067B1"):
+    values = np.asarray(mortality_values, dtype=np.float64).reshape(-1)
+    lower = None if lower_bounds is None else np.asarray(lower_bounds, dtype=np.float64).reshape(-1)
+    upper = None if upper_bounds is None else np.asarray(upper_bounds, dtype=np.float64).reshape(-1)
+
+    def pct_at(year_idx):
+        if year_idx < len(values):
+            return f"{values[year_idx] * 100:.1f}%"
+        return "—"
+
+    def width_at(year_idx):
+        if lower is None or upper is None or year_idx >= len(lower) or year_idx >= len(upper):
+            return "—"
+        return f"{max(0.0, upper[year_idx] - lower[year_idx]) * 100:.1f}%"
+
+    cards = [
+        ("1-Year Risk", pct_at(0)),
+        ("5-Year Risk", pct_at(4)),
+        ("10-Year Risk", pct_at(9)),
+        ("10-Year Interval Width", width_at(9)),
+    ]
+
+    return html.Div([
+        html.Div([
+            html.Div(label, className="kpi-label"),
+            html.Div(value, className="kpi-value", style={"color": accent_color}),
+        ], className="kpi-card")
+        for label, value in cards
+    ], className="kpi-row")
+
+def create_trajectory_plot(person_id, coeffcients, updated_coeffcients=None, window_width=None):
     batch_basis_eval_tensor = paddle.to_tensor(batch_basis_eval, dtype='float32')
     pred_time = np.linspace(0, 3, 100)
     num_variables = 12
+    num_cols = 3
+    num_rows = math.ceil(num_variables / num_cols)
+
+    # Responsive height: compact on mobile
+    is_mobile = window_width is not None and window_width < 768
+    height_per_row = 130 if is_mobile else 190
+    fig_height = height_per_row * num_rows
+
+    # Nice palette
+    COLOR_ORIGINAL = "#3B82F6"  # vivid blue
+    COLOR_UPDATED  = "#F97316"  # warm orange
 
     fig = make_subplots(
-        rows=math.ceil(num_variables / 4), cols=4,
+        rows=num_rows, cols=num_cols,
         subplot_titles=[long_names[i] for i in range(num_variables)],
-        horizontal_spacing=0.05, vertical_spacing=0.15
+        horizontal_spacing=0.07, vertical_spacing=0.08
     )
 
     for var_idx in range(num_variables):
-        row = var_idx // 4 + 1
-        col = var_idx % 4 + 1
+        row = var_idx // num_cols + 1
+        col = var_idx % num_cols + 1
 
         basis_tensor_var = batch_basis_eval_tensor[:, var_idx, :, :]
         coeffs_var = coeffcients[var_idx]
 
-        basis_tensor_person = basis_tensor_var[person_id] 
-        coeffs_person =  coeffs_var[person_id].unsqueeze(0) 
+        basis_tensor_person = basis_tensor_var[person_id]
+        coeffs_person = coeffs_var[person_id].unsqueeze(0)
 
         curve = paddle.matmul(coeffs_person, basis_tensor_person).squeeze(0).numpy()
         curve = curve * std_list[var_idx] + mean_list[var_idx]
+        curve = np.clip(curve, 0, None)  # values cannot be negative
 
         showlegend_indicator = (var_idx == 0) if updated_coeffcients is not None else False
         fig.add_trace(
-            go.Scatter(x=pred_time, y=curve, mode='lines', name='Original', showlegend=showlegend_indicator,line=dict(color='blue')),
+            go.Scatter(x=pred_time, y=curve, mode='lines', name='Original',
+                       showlegend=showlegend_indicator,
+                       line=dict(color=COLOR_ORIGINAL, width=2)),
             row=row, col=col
         )
 
@@ -120,24 +168,30 @@ def create_trajectory_plot(person_id,coeffcients,updated_coeffcients=None):
             updated_coeffs_var = updated_coeffcients[var_idx][0].unsqueeze(0)
             updated_curve = paddle.matmul(updated_coeffs_var, basis_tensor_person).squeeze(0).numpy()
             updated_curve = updated_curve * std_list[var_idx] + mean_list[var_idx]
+            updated_curve = np.clip(updated_curve, 0, None)  # values cannot be negative
 
             fig.add_trace(
-                go.Scatter(x=pred_time, y=updated_curve, mode='lines', name='Updated', showlegend=showlegend_indicator,line=dict(color='red')),
+                go.Scatter(x=pred_time, y=updated_curve, mode='lines', name='Updated',
+                           showlegend=showlegend_indicator,
+                           line=dict(color=COLOR_UPDATED, width=2)),
                 row=row, col=col
             )
 
-
-
+        # x-axis "Years" only on bottom row; y-axis "Values" only on first column
+        if row == num_rows:
+            fig.update_xaxes(title_text="Years", title_font=dict(size=10), row=row, col=col)
+        if col == 1:
+            fig.update_yaxes(title_text="Values", title_font=dict(size=10), row=row, col=col)
 
     fig.update_layout(
-        height=220 * math.ceil(num_variables / 4),
+        height=fig_height,
         title_text=f"Predicted 3-Year Trajectories of Risk Factors — Patient {person_id + 1}",
         title_font=dict(size=15, color="#003087", family="Segoe UI, Arial"),
         template='plotly_white',
         plot_bgcolor="rgba(248,251,255,0.9)",
         paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=11, color="#444"),
-        margin=dict(t=80, b=40, l=40, r=20),
+        margin=dict(t=80, b=50, l=50, r=20),
         legend=dict(
             orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
             bgcolor="rgba(255,255,255,0.85)", bordercolor="#dee2e6", borderwidth=1
@@ -293,6 +347,83 @@ def conformal_mortality_prediction(
     }
 
 
+def mc_dropout_predict(model_obj, input_tensor, mask_tensor, n_samples=1000, alpha=0.05, label='', mc_dropout_p=0.01):
+    """Run MC Dropout to get prediction intervals without calibration data.
+    Uses forward() directly instead of predict(), because predict() calls
+    self.eval() internally which disables dropout.
+
+    mc_dropout_p: drop rate used during MC inference (default 0.01).
+        Two dropout sources exist in forward():
+          1. nn.Dropout sublayers (p = 1-keep_prob = 0.27  at train time)
+          2. F.dropout(out, p=self.keep_prob) — note: F.dropout's p is the DROP
+             rate, so with keep_prob=0.73 this was actually dropping 73 % of
+             neurons, far more aggressive than intended.
+        Both are patched to mc_dropout_p so each MC sample is close to the mean
+        prediction while preserving stochasticity for functional-depth bands.
+    """
+    # Save random state, set fixed seed for reproducibility, then restore
+    np_state = np.random.get_state()
+    np.random.seed(42)
+    paddle.seed(42)
+    global mc_progress
+
+    # -- Temporarily lower every Dropout layer's p to mc_dropout_p ----------
+    dropout_layers = [m for m in model_obj.sublayers()
+                      if isinstance(m, paddle.nn.Dropout)]
+    original_p = [m.p for m in dropout_layers]
+    for m in dropout_layers:
+        m.p = mc_dropout_p
+
+    # Also patch the functional F.dropout call in forward() which uses self.keep_prob
+    original_keep_prob = model_obj.keep_prob
+    model_obj.keep_prob = mc_dropout_p
+    # -------------------------------------------------------------------------
+
+    model_obj.train()
+    predictions_list = []
+    mc_progress.update({'current': 0, 'total': n_samples, 'running': True, 'eta': '', 'label': label})
+    t_start = time.time()
+    for i in range(n_samples):
+        with paddle.no_grad():
+            preds, _ = model_obj.forward(input_tensor, mask_tensor)
+        preds = preds[:, 0, :].numpy()
+        mort = np.cumsum(preds, axis=1)
+        mort[:, -1] = 1
+        predictions_list.append(mort)
+        if (i + 1) % 10 == 0 or i == n_samples - 1:
+            elapsed = time.time() - t_start
+            rate = (i + 1) / elapsed if elapsed > 0 else 0
+            remaining = (n_samples - i - 1) / rate if rate > 0 else 0
+            mc_progress.update({'current': i + 1, 'eta': f'{remaining:.1f}s'})
+    model_obj.eval()
+    # -- Restore original dropout rates --------------------------------------
+    for m, p in zip(dropout_layers, original_p):
+        m.p = p
+    model_obj.keep_prob = original_keep_prob
+    # -------------------------------------------------------------------------
+    np.random.set_state(np_state)
+    mc_progress.update({'current': n_samples, 'running': False, 'eta': '', 'label': ''})
+
+    all_preds = np.stack(predictions_list, axis=0)  # (n_samples, batch, time)
+    mean = np.clip(np.mean(all_preds, axis=0), 0, 1)
+
+    # Functional band depth CI (Modified Band Depth, J=2)
+    n, B, T = all_preds.shape
+    ranks = np.argsort(np.argsort(all_preds, axis=0), axis=0) + 1  # (n, B, T)
+    depth = np.sum((ranks - 1) * (n - ranks), axis=2)  # (n, B)
+
+    n_keep = max(1, int(n * (1 - alpha)))
+    lower = np.zeros((B, T), dtype=np.float32)
+    upper = np.zeros((B, T), dtype=np.float32)
+    for b in range(B):
+        keep_idx = np.argsort(depth[:, b])[::-1][:n_keep]
+        kept = all_preds[keep_idx, b, :]
+        lower[b] = np.clip(kept.min(axis=0), 0, 1)
+        upper[b] = np.clip(kept.max(axis=0), 0, 1)
+
+    return lower, upper, mean
+
+
 def get_waterfall_base64(X_and_mask_eval,df_combined_with_mask_eval,index, order=None):
     np.random.seed(42)
     shap_values_eval = explainer(X_and_mask_eval[index])
@@ -348,20 +479,110 @@ app.index_string = """
     {%favicon%}
     {%css%}
     <style>
-      body { background: #eef2f7 !important; font-family: "Segoe UI", Arial, sans-serif; }
+            body {
+                background:
+                    radial-gradient(circle at top left, rgba(70,120,255,.10), transparent 24%),
+                    radial-gradient(circle at top right, rgba(0,160,220,.08), transparent 18%),
+                    linear-gradient(180deg, #f6f9fd 0%, #eef3f8 100%) !important;
+                font-family: "Segoe UI", Arial, sans-serif;
+            }
 
       /* ── upload drop-zone ── */
       .upload-zone {
         width: 100%; height: 80px; line-height: 80px;
-        border: 2px dashed #0067B1; border-radius: 8px;
-        text-align: center; background: #f8fbff; color: #0067B1;
-        cursor: pointer; transition: background .2s;
+                border: 1.5px dashed rgba(0,103,177,.45); border-radius: 12px;
+                text-align: center; background: linear-gradient(180deg, #fbfdff 0%, #eef6ff 100%);
+                color: #0067B1; cursor: pointer;
+                transition: background .2s, transform .18s ease, box-shadow .18s ease, border-color .18s ease;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,.8), 0 4px 14px rgba(0,61,128,.06);
       }
-      .upload-zone:hover { background: #d6e8ff; }
+            .upload-zone:hover {
+                background: linear-gradient(180deg, #f2f8ff 0%, #dcecff 100%);
+                border-color: rgba(0,103,177,.72);
+                transform: translateY(-1px);
+                box-shadow: inset 0 1px 0 rgba(255,255,255,.85), 0 8px 20px rgba(0,61,128,.10);
+            }
 
       /* ── card tweaks ── */
-      .card { border: none !important; border-radius: 12px !important; }
-      .card-header { border-radius: 12px 12px 0 0 !important; }
+            .card {
+                border: 1px solid rgba(213,223,236,.95) !important;
+                border-radius: 16px !important;
+                box-shadow: 0 10px 24px rgba(18,52,86,.08), 0 2px 8px rgba(18,52,86,.05) !important;
+                background: rgba(255,255,255,.96) !important;
+                overflow: hidden;
+            }
+            .card-header {
+                border-radius: 16px 16px 0 0 !important;
+                letter-spacing: .15px;
+            }
+            .app-card .card-body {
+                background: linear-gradient(180deg, rgba(255,255,255,.98) 0%, rgba(248,251,255,.98) 100%);
+            }
+            .app-results-card .card-body {
+                background: linear-gradient(180deg, #fcfdff 0%, #f4f8fc 100%);
+            }
+
+            .accordion-item {
+                border: 1px solid rgba(220,228,238,.95) !important;
+                border-radius: 14px !important;
+                overflow: hidden;
+                margin-bottom: 12px;
+                box-shadow: 0 4px 12px rgba(16,38,66,.05);
+            }
+            .accordion-button {
+                background: linear-gradient(180deg, #ffffff 0%, #f6f9fd 100%) !important;
+                box-shadow: none !important;
+                font-weight: 600;
+            }
+            .accordion-button:not(.collapsed) {
+                background: linear-gradient(180deg, #f7fbff 0%, #eef6ff 100%) !important;
+                color: #003087 !important;
+            }
+            .accordion-button:focus {
+                box-shadow: 0 0 0 .18rem rgba(0,103,177,.12) !important;
+                border-color: rgba(0,103,177,.15) !important;
+            }
+            .accordion-body {
+                background: linear-gradient(180deg, #ffffff 0%, #fbfdff 100%);
+            }
+
+            .app-subtle-panel {
+                background: linear-gradient(180deg, #f9fbff 0%, #eef5ff 100%);
+                border: 1px solid rgba(213,223,236,.95);
+                border-radius: 12px;
+                box-shadow: inset 0 1px 0 rgba(255,255,255,.75);
+            }
+
+            .btn {
+                border-radius: 10px !important;
+            }
+
+            .kpi-row {
+                display: grid;
+                grid-template-columns: repeat(4, minmax(0, 1fr));
+                gap: 12px;
+                margin-bottom: 14px;
+            }
+            .kpi-card {
+                background: linear-gradient(180deg, #ffffff 0%, #f6faff 100%);
+                border: 1px solid rgba(213,223,236,.95);
+                border-radius: 14px;
+                padding: 12px 14px;
+                box-shadow: 0 6px 16px rgba(20,66,114,.06);
+            }
+            .kpi-label {
+                font-size: 11px;
+                font-weight: 600;
+                letter-spacing: .2px;
+                text-transform: uppercase;
+                color: #6b7b8f;
+                margin-bottom: 6px;
+            }
+            .kpi-value {
+                font-size: 1.15rem;
+                font-weight: 700;
+                line-height: 1.1;
+            }
 
       /* ── instruction steps ── */
       .step-badge {
@@ -403,8 +624,14 @@ app.index_string = """
         /* header: shrink text */
         .app-header-title { font-size: 1.2rem !important; }
         .app-header-sub   { font-size: 0.72rem !important; }
+                .app-header-meta  { font-size: 0.66rem !important; }
         .app-header-icon  { font-size: 1.4rem !important; }
         .app-header-wrap  { padding: 18px 16px !important; }
+                .app-header-main  { flex-direction: column !important; align-items: stretch !important; width: 100% !important; }
+        .app-header-text  { width: 100% !important; flex: 0 0 100% !important; max-width: 100% !important; }
+        .app-header-text > div { width: 100% !important; }
+                .app-header-logo  { margin-left: 0 !important; margin-top: 10px !important; align-self: flex-start !important; }
+                .app-header-logo img { height: 34px !important; }
 
         /* card body padding */
         .card-body { padding: 12px !important; }
@@ -427,6 +654,10 @@ app.index_string = """
 
         /* upload zone: shorter */
         .upload-zone { height: 64px; line-height: 64px; font-size: 0.82rem; }
+
+        .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+        .kpi-card { padding: 10px 12px; }
+        .kpi-value { font-size: 1rem; }
 
         /* main panel body padding */
         #main-results-body { padding: 12px !important; }
@@ -458,6 +689,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
     dcc.Store(id='update-ran', data=False),
     dcc.Store(id='interval-enabled', data=False),
     dcc.Store(id='interval-enabled-updated', data=False),
+    dcc.Store(id='window-width-store', data=1200),
 
     # ── Header banner ───────────────────────────────────────────────────────
     dbc.Row(dbc.Col(
@@ -488,12 +720,19 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                              "marginLeft": "0.4rem"}),
                         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
                         html.P(
-                            "Multi-Task DeepHit v2.14  ·  Conformal Prediction Intervals  ·  SHAP Explainability",
+                            "Multi-Task DeepHit v2.14  ·  Flexible Prediction Intervals  ·  SHAP Explainability",
                             className="app-header-sub",
                             style={"color": "rgba(255,255,255,.65)", "marginTop": "6px",
                                    "fontSize": "0.85rem", "marginBottom": "0"}
                         ),
-                    ], style={"flex": "1"}),
+                        html.P(
+                            "Demo · Research only",
+                            className="app-header-meta",
+                            style={"color": "rgba(255,255,255,.55)", "marginTop": "6px",
+                                   "fontSize": "0.72rem", "marginBottom": "0",
+                                   "letterSpacing": ".3px", "textTransform": "none"}
+                        ),
+                    ], className="app-header-text", style={"flex": "1"}),
                     # Right: NHLBI logo
                     html.Div(
                         html.Img(
@@ -505,9 +744,10 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 "opacity": "0.92",
                             }
                         ),
+                        className="app-header-logo",
                         style={"marginLeft": "24px", "flexShrink": "0"}
                     ),
-                ], style={"display": "flex", "alignItems": "center", "justifyContent": "space-between"}),
+                ], className="app-header-main", style={"display": "flex", "alignItems": "center", "justifyContent": "space-between"}),
             ]
         )
     )),
@@ -533,6 +773,11 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         "Download Example CSV"
                     ], id="btn-download-example", color="outline-primary",
                        className="w-100 mb-3", size="sm"),
+                    dbc.Button([
+                        html.I(className="fas fa-bolt me-2"),
+                        "Load Example Data"
+                    ], id="btn-load-example-data", color="primary",
+                       className="w-100 mb-3", size="sm"),
                     dcc.Download(id="download-example-csv"),
                     dcc.Upload(
                         id='upload-data',
@@ -550,45 +795,77 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                              className="mt-2"),
                     html.Div(id='upload-data-status', className="mt-1 small text-muted")
                 ])
-            ], className="shadow mb-3"),
+            ], className="app-card shadow-sm mb-3"),
 
-            # Upload calibration data
+            # Prediction interval methods
             dbc.Card([
                 dbc.CardHeader(
                     html.Div([
-                        html.I(className="fas fa-chart-line me-2"),
-                        html.Span("Upload Calibration Data", style={"fontWeight": "600"})
+                        html.I(className="fas fa-route me-2"),
+                        html.Span("Prediction Interval Methods", style={"fontWeight": "600"})
                     ]),
                     style={"background": "linear-gradient(90deg,#155724,#28a745)",
                            "color": "white", "padding": "12px 16px"}
                 ),
                 dbc.CardBody([
-                    dbc.Button([
-                        html.I(className="fas fa-file-csv me-2"),
-                        "Download Example CSV"
-                    ], id="btn-download-calibration-example", color="outline-success",
-                       className="w-100 mb-3", size="sm"),
-                    dcc.Download(id="download-calibration-example-csv"),
-                    dcc.Upload(
-                        id='upload-calibration-data',
-                        children=html.Div([
-                            html.I(className="fas fa-cloud-upload-alt me-2",
-                                   style={"fontSize": "1.1rem"}),
-                            "Click or drag & drop calibration CSV"
-                        ]),
-                        className="upload-zone",
-                        style={"borderColor": "#28a745", "color": "#28a745",
-                               "background": "#f6fff8"},
-                        multiple=False
+                    dbc.Label([
+                        html.I(className="fas fa-sliders-h me-2 text-primary"),
+                        "Choose interval method"
+                    ], style={"fontWeight": "600", "marginBottom": "6px", "fontSize": "0.88rem"}),
+                    dbc.RadioItems(
+                        id='interval-method-selector',
+                        options=[
+                            {'label': 'Conformal Prediction (Addiitonal calibration data required)', 'value': 'conformal'},
+                            {'label': 'MC Rollout(No need calibration data)', 'value': 'mc'},
+                            {'label': 'No interval (curve only)', 'value': 'none'},
+                        ],
+                        value='mc',
+                        inline=False,
+                        style={"fontSize": "0.82rem"}
                     ),
-                    html.Div(id='calibration-status',
-                             children=dbc.Badge("Prediction interval not applied",
-                                                color="warning",
-                                                className="mt-2 px-3 py-2 w-100 text-start"),
-                             className="mt-2"),
-                    html.Div(id='upload-calibration-status', className="mt-1 small text-muted")
+                    html.Small(
+                        id='interval-method-hint',
+                        children="",
+                        className="text-muted", style={"fontSize": "0.75rem"}
+                    ),
+
+                    html.Div(id='conformal-upload-panel', children=[
+                        html.Hr(style={"borderColor": "#dee2e6", "margin": "10px 0 10px"}),
+                        dbc.Alert([
+                            html.I(className="fas fa-info-circle me-2"),
+                            "Conformal mode requires calibration data. Upload a calibration CSV below."
+                        ], color="light", className="py-2 px-3 mb-2",
+                           style={"fontSize": "0.82rem", "borderRadius": "8px"}),
+                        dbc.Button([
+                            html.I(className="fas fa-file-csv me-2"),
+                            "Download Calibration Example CSV"
+                        ], id="btn-download-calibration-example", color="outline-success",
+                           className="w-100 mb-3", size="sm"),
+                        dcc.Download(id="download-calibration-example-csv"),
+                        dcc.Upload(
+                            id='upload-calibration-data',
+                            children=html.Div([
+                                html.I(className="fas fa-cloud-upload-alt me-2",
+                                       style={"fontSize": "1.1rem"}),
+                                "Click or drag & drop calibration CSV"
+                            ]),
+                            className="upload-zone",
+                            style={"borderColor": "#28a745", "color": "#28a745",
+                                   "background": "#f6fff8"},
+                            multiple=False
+                        ),
+                        html.Div(id='calibration-status',
+                                 children=dbc.Badge("Prediction interval not applied",
+                                                    color="warning",
+                                                    className="mt-2 px-3 py-2 w-100 text-start"),
+                                 className="mt-2"),
+                        html.Div(id='upload-calibration-status', className="mt-1 small text-muted"),
+                    ], className="app-subtle-panel", style={"display": "none", "padding": "12px"}),
+
+                    dcc.Interval(id='mc-progress-interval', interval=500, disabled=True),
+                    dcc.Store(id='mc-trigger-store'),
                 ])
-            ], className="shadow mb-3"),
+            ], className="app-card shadow-sm mb-3"),
 
             # Instructions
             dbc.Card([
@@ -607,8 +884,8 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                     ], className="mb-2") for n, txt in [
                         (1, "Download Example CSV for the required format."),
                         (2, "Upload a CSV with 68 numeric columns."),
-                        (3, "(Optional) Upload calibration data for prediction intervals."),
-                        (4, "View mortality predictions in the Prediction Table section."),
+                        (3, "Choose a prediction interval method (Conformal / MC Rollout / None)."),
+                        (4, "If Conformal is selected, upload calibration CSV in the same panel."),
                         (5, "Click a patient row to view results in all sections:"),
                     ]],
                     html.Ul([
@@ -618,10 +895,10 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                     ], style={"paddingLeft": "28px", "marginBottom": "6px"}),
                     html.Div([
                         html.Span("6", className="step-badge"),
-                        html.Span("Click 'Edit Features' below the SHAP plot to modify values, then click 'Update Analysis'.", style={"fontSize": "0.82rem"})
+                        html.Span("Use 'Edit Features' below SHAP to modify values, then click 'Update Analysis'.", style={"fontSize": "0.82rem"})
                     ]),
                 ])
-            ], className="shadow mb-3"),
+            ], className="app-card shadow-sm mb-3"),
 
         ], xs=12, md=4, lg=3),
 
@@ -642,6 +919,11 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         # ── Section 1: Prediction Table ──────────────────────
                         dbc.AccordionItem([
                             dcc.Loading(id='loading-table', type='dot',
+                                        custom_spinner=html.Div([
+                                            dbc.Spinner(size="sm", color="primary"),
+                                            html.Span("Loading predictions...", style={"color": "#003087", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
+
                                         children=html.Div(id='output')),
                         ],
                             title=html.Span([
@@ -667,13 +949,27 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                         tooltip={"placement": "bottom", "always_visible": True}
                                     )
                                 ],
-                                style={"display": "none",
-                                       "background": "#eef6ff", "borderRadius": "10px",
+                                    style={"display": "none",
+                                        "background": "linear-gradient(180deg, #f7fbff 0%, #edf5ff 100%)", "borderRadius": "12px",
                                         "padding": "16px", "marginBottom": "24px",
-                                        "overflow": "visible", "position": "relative", "zIndex": 20}
+                                         "overflow": "visible", "position": "relative", "zIndex": 20,
+                                         "border": "1px solid rgba(198,218,242,.95)",
+                                         "boxShadow": "0 6px 18px rgba(20,66,114,.06)"}
                             ),
+                            html.Div(id='mc-progress-container', children=[
+                                html.Div(id='mc-progress-label', style={
+                                    "fontSize": "0.8rem", "fontWeight": "600", "color": "#003087", "marginBottom": "4px"
+                                }),
+                                dbc.Progress(id='mc-progress-bar', value=0, striped=True, animated=True,
+                                             style={"height": "16px", "borderRadius": "8px"}, className="mb-1"),
+                                html.Div(id='mc-progress-eta', style={"fontSize": "0.75rem", "color": "#888"}),
+                            ], style={"marginBottom": "10px", "display": "none"}),
                             html.Div(id='wrap-mortality',
                                      children=dcc.Loading(id='loading-mortality', type='dot',
+                                                          custom_spinner=html.Div([
+                                                              dbc.Spinner(size="sm", color="primary"),
+                                                              html.Span("Computing mortality curve...", style={"color": "#0067B1", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                          ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                           children=html.Div(id='mortality-plot'))),
                             html.Div(
                                 id='alpha-container-updated',
@@ -689,12 +985,18 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                         tooltip={"placement": "bottom", "always_visible": True}
                                     )
                                 ],
-                                style={"display": "none",
-                                       "background": "#fff3f3", "borderRadius": "10px",
+                                    style={"display": "none",
+                                        "background": "linear-gradient(180deg, #fff8f8 0%, #fff0f0 100%)", "borderRadius": "12px",
                                         "padding": "16px", "marginTop": "10px", "marginBottom": "24px",
-                                        "overflow": "visible", "position": "relative", "zIndex": 20}
+                                         "overflow": "visible", "position": "relative", "zIndex": 20,
+                                         "border": "1px solid rgba(244,210,210,.95)",
+                                         "boxShadow": "0 6px 18px rgba(122,40,40,.05)"}
                             ),
                             dcc.Loading(id='loading-update_mortality', type='dot',
+                                        custom_spinner=html.Div([
+                                            dbc.Spinner(size="sm", color="danger"),
+                                            html.Span("Updating mortality analysis...", style={"color": "#C8102E", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                         children=html.Div(id='mortality-plot-updated')),
                         ],
                             title=html.Span([
@@ -708,8 +1010,16 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         dbc.AccordionItem([
                             html.Div(id='wrap-trajectory',
                                      children=dcc.Loading(id='loading-trajectory', type='dot',
+                                                          custom_spinner=html.Div([
+                                                              dbc.Spinner(size="sm", color="success"),
+                                                              html.Span("Generating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                                          ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                                           children=html.Div(id='trajectory-plot'))),
                             dcc.Loading(id='loading-update_trajectory', type='dot',
+                                        custom_spinner=html.Div([
+                                            dbc.Spinner(size="sm", color="success"),
+                                            html.Span("Updating risk factor trajectories...", style={"color": "#155724", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                         children=html.Div(id='trajectory-plot-updated')),
                         ],
                             title=html.Span([
@@ -723,10 +1033,18 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         dbc.AccordionItem([
                             # 1. Original SHAP
                             dcc.Loading(id='loading-shap', type='dot',
+                                        custom_spinner=html.Div([
+                                            dbc.Spinner(size="sm", color="warning"),
+                                            html.Span("Computing SHAP feature importance...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                         children=html.Div(id='shap-plot')),
 
                             # 2. Updated SHAP (appears after Update Analysis)
                             dcc.Loading(id='loading-update', type='dot',
+                                        custom_spinner=html.Div([
+                                            dbc.Spinner(size="sm", color="warning"),
+                                            html.Span("Updating SHAP analysis...", style={"color": "#856404", "fontWeight": "600", "fontSize": "0.9rem", "marginLeft": "8px"})
+                                        ], style={"display": "flex", "alignItems": "center", "justifyContent": "center", "padding": "20px"}),
                                         children=html.Div(id='shap-plot-updated', className="mt-3")),
 
                             # hint — visible above the button
@@ -808,8 +1126,8 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         flush=False,
                         style={"borderRadius": "10px", "overflow": "hidden"},
                     ),
-                ], id="main-results-body", style={"padding": "16px"})
-            ], className="shadow"), xs=12, md=8, lg=9
+                ], id="main-results-body", style={"padding": "18px"})
+            ], className="app-card app-results-card shadow-sm"), xs=12, md=8, lg=9
         )
     ]),
 
@@ -952,22 +1270,114 @@ def preprocess_calibration(contents, filename):
     )
 
 @app.callback(
+    Output('interval-method-selector', 'options'),
+    Output('interval-method-selector', 'value'),
+    Output('interval-method-hint', 'children'),
+    Input('memory-calibration', 'data'),
+    State('interval-method-selector', 'value'),
+)
+def update_interval_method_selector(calib_data, current_method):
+    has_calib = calib_data is not None
+    options = [
+        {'label': 'Conformal Prediction (Addiitonal calibration data required)', 'value': 'conformal'},
+        {'label': 'MC Rollout(No need calibration data)', 'value': 'mc'},
+        {'label': 'No interval (curve only)', 'value': 'none'},
+    ]
+
+    next_method = current_method if current_method in ['conformal', 'mc', 'none'] else 'mc'
+
+    hint = ""
+    return options, next_method, hint
+
+
+@app.callback(
+    Output('conformal-upload-panel', 'style'),
+    Input('interval-method-selector', 'value'),
+)
+def toggle_conformal_upload_panel(interval_method):
+    if interval_method == 'conformal':
+        return {"display": "block", "marginTop": "4px"}
+    return {"display": "none"}
+
+
+# Clientside callback: signal that MC might start (patient click or update button while MC enabled)
+app.clientside_callback(
+    """
+    function(active_cell, n_clicks, interval_method) {
+        if (interval_method === 'mc') {
+            return Date.now();  // unique trigger value
+        }
+        return window.dash_clientside.no_update;
+    }
+    """,
+    Output('mc-trigger-store', 'data'),
+    Input('x-table', 'active_cell'),
+    Input('update-shap-button', 'n_clicks'),
+    State('interval-method-selector', 'value'),
+    prevent_initial_call=True
+)
+
+
+@app.callback(
+    Output('mc-progress-container', 'style'),
+    Output('mc-progress-bar', 'value'),
+    Output('mc-progress-bar', 'label'),
+    Output('mc-progress-label', 'children'),
+    Output('mc-progress-eta', 'children'),
+    Output('mc-progress-interval', 'disabled'),
+    Input('mc-progress-interval', 'n_intervals'),
+    Input('mc-trigger-store', 'data'),
+    prevent_initial_call=True
+)
+def update_mc_progress(n_intervals, trigger):
+    from dash import ctx
+    # If triggered by mc-trigger-store, enable interval and show progress
+    if ctx.triggered_id == 'mc-trigger-store':
+        return (
+            {"marginTop": "8px", "display": "block"},
+            0, '0/1000', 'MC Dropout Sampling — starting...', '', False
+        )
+    # Polled by interval
+    if not mc_progress['running']:
+        return {"marginTop": "8px", "display": "none"}, 0, '', '', '', True  # disable interval
+    pct = int(mc_progress['current'] / mc_progress['total'] * 100) if mc_progress['total'] > 0 else 0
+    label_text = f"{mc_progress['current']}/{mc_progress['total']}"
+    title = f"MC Dropout Sampling — {mc_progress['label']}" if mc_progress['label'] else "MC Dropout Sampling"
+    eta = f"ETA: {mc_progress['eta']}" if mc_progress['eta'] else ''
+    return (
+        {"marginTop": "8px", "display": "block"},
+        pct,
+        label_text,
+        title,
+        eta,
+        False  # keep interval running
+    )
+
+
+@app.callback(
     Output('output', 'children'),
     Output('memory-predictions', 'data'),
     Output('data-status', 'children'),
     Output('upload-data-status', 'children'),
     Input('upload-data', 'contents'),
+    Input('btn-load-example-data', 'n_clicks'),
     State('upload-data', 'filename')
 )
-def predict(contents, filename):
-    if contents is None:
-        return html.Div("Please upload a CSV file."), dash.no_update,dash.no_update,dash.no_update
+def predict(contents, n_load_example, filename):
+    from dash import ctx
+    trigger = ctx.triggered_id
 
-    content_type, content_string = contents.split(',')
-    decoded = base64.b64decode(content_string)
-    df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+    if trigger == 'btn-load-example-data':
+        df = X_example.copy()
+        filename = "example_scd_data.csv"
+    elif contents is None:
+        return html.Div("Please upload a CSV file."), dash.no_update,dash.no_update,dash.no_update
+    else:
+        content_type, content_string = contents.split(',')
+        decoded = base64.b64decode(content_string)
+        df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
     # round all values to 5 decimal places
-    
+
     _err_status = dbc.Badge([html.I(className="fas fa-times-circle me-1"), "Data not uploaded"],
                             color="danger", className="mt-2 px-3 py-2 w-100 text-start")
     if not all(col in X_example.columns for col in df.columns):
@@ -992,7 +1402,7 @@ def predict(contents, filename):
     df_scaled = df_scaled.fillna(0)
 
     mask_tensor = paddle.to_tensor(mask.to_numpy().astype('float32'))
-    
+
     input_tensor = paddle.to_tensor(df_scaled.values.astype('float32'))
     predictions, coefficients = model.predict(input_tensor, mask_tensor)
     predictions = predictions[:, 0, :].numpy()
@@ -1000,14 +1410,14 @@ def predict(contents, filename):
     mortality[:, -1] = 1
 
     pred_df = pd.DataFrame(mortality, columns=[f"{i+1}-year Mortality" for i in range(mortality.shape[1])])
-    
-    
+
+
     cols = pred_df.columns.tolist()
     cols[-1] = "Over 15-year Mortality"
     pred_df.columns = cols
 
     pred_df.insert(0, 'Patient ID', range(1, len(pred_df) + 1))
-   
+
     df_features = df.copy()
     df_features.insert(0, 'Patient ID', range(1, len(df) + 1))
     coefficients_np = [c.numpy().tolist() for c in coefficients]
@@ -1017,7 +1427,7 @@ def predict(contents, filename):
     }
     _tbl_cell = {
         'padding': '7px 10px', 'minWidth': '80px',
-        'whiteSpace': 'normal', 'fontSize': '12px',
+        'whiteSpace': 'nowrap', 'fontSize': '12px',
         'border': '1px solid #dee2e6'
     }
     _tbl_data_cond = [
@@ -1048,7 +1458,7 @@ def predict(contents, filename):
                     columns=[{'name': col, 'id': col} for col in df_features.columns],
                     page_action='none',
                     style_table={'height': 'auto', 'overflowX': 'auto',
-                                 'borderRadius': '8px', 'overflow': 'hidden',
+                                 'borderRadius': '8px',
                                  'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
                     style_header=_tbl_header,
                     style_cell=_tbl_cell,
@@ -1074,7 +1484,7 @@ def predict(contents, filename):
                     ],
                     page_action='none',
                     style_table={'height': 'auto', 'overflowX': 'auto',
-                                 'borderRadius': '8px', 'overflow': 'hidden',
+                                 'borderRadius': '8px',
                                  'boxShadow': '0 1px 6px rgba(0,0,0,.08)'},
                     style_header=_tbl_header,
                     style_cell={**_tbl_cell, 'minWidth': '100px'},
@@ -1132,17 +1542,20 @@ def track_update_ran(n_clicks, active_cell):
 @app.callback(
     Output('alpha-container', 'style'),
     Input('memory-calibration', 'data'),
+    Input('interval-method-selector', 'value'),
     Input('x-table', 'active_cell'),
     Input('update-shap-button', 'n_clicks'),
     State('update-ran', 'data'),
     State('memory-predictions', 'data'),
 )
-def toggle_slider_visibility(calib_data, active_cell, n_clicks, update_ran, memory_predictions):
+def toggle_slider_visibility(calib_data, interval_method, active_cell, n_clicks, update_ran, memory_predictions):
     from dash import ctx
     # Hide if update was just clicked, or if update already ran and calib is being reloaded
     if ctx.triggered_id == 'update-shap-button' and n_clicks:
         return {"display": "none"}
     if update_ran:
+        return {"display": "none"}
+    if interval_method != 'conformal':
         return {"display": "none"}
     # Show if calibration loaded and there's any prediction result
     has_result = active_cell is not None or memory_predictions is not None
@@ -1176,18 +1589,21 @@ def download_mortality_table(n_clicks, memory):
     Input('x-table', 'active_cell'),
     Input('alpha-slider', 'value'),
     Input('memory-calibration', 'data'),
-    State('interval-enabled', 'data'),
+    State('interval-method-selector', 'value'),
     State('memory-predictions', 'data'),
+    State('window-width-store', 'data'),
     prevent_initial_call=True
 )
-def plot_mortality(active_cell, alpha_value, memory_calibration, interval_enabled, memory):
+def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method, memory, window_width):
     if not memory or not active_cell:
         raise dash.exceptions.PreventUpdate
 
     alpha_value = 0.05 if alpha_value is None else float(alpha_value)
     alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
 
-    plot_interval = bool(memory_calibration is not None and interval_enabled)
+    selected_method = interval_method or ('conformal' if memory_calibration is not None else 'mc')
+    plot_conformal = bool(selected_method == 'conformal' and memory_calibration is not None)
+    plot_mc = bool(selected_method == 'mc')
 
     i = active_cell['row']
     mortality = np.array([
@@ -1205,18 +1621,22 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_enable
         marker=dict(size=7, color="#0067B1", line=dict(color="white", width=1.5))
     ))
 
-    if plot_interval:
+    has_interval = False
+    lower = None
+    upper = None
+
+    if plot_conformal:
         data_calibration_scaled_with_mask = np.asarray(memory_calibration['data_calibration_scaled_with_mask'], dtype=np.float32)
-        
+
         Event_time_calibration = np.asarray(memory_calibration['Event_time_calibration']).reshape(-1).astype(np.int64)
-        
+
         Event_status_calibration = np.asarray(memory_calibration['Event_status_calibration']).reshape(-1).astype(np.int64)
         df_scaled = pd.DataFrame(memory['scaled_df'])
         mask = pd.DataFrame(memory['mask'],dtype='float32')
         X_and_mask_eval = np.concatenate((df_scaled.values, mask.values), axis=1)
-        
+
         X_and_mask_test = X_and_mask_eval[i].reshape(1, -1)
-        
+
         result = conformal_mortality_prediction(
             model_original=model_copy,
             X_and_mask=data_calibration_scaled_with_mask,
@@ -1228,23 +1648,54 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_enable
         )
         lower = result['corrected_lower_bounds']
         upper = result['corrected_upper_bounds']
+        has_interval = True
 
         # Add shaded confidence interval
         fig.add_traces([
             go.Scatter(
-                x=x + x[::-1],  # forward + reverse
-                y=upper + lower[::-1],  # upper bound followed by lower bound reversed
+                x=x + x[::-1],
+                y=upper + lower[::-1],
                 fill='toself',
                 fillcolor='rgba(0, 123, 255, 0.2)',
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"{int((1 - alpha_value) * 100)}% Interval"
+                name=f"{int((1 - alpha_value) * 100)}% Conformal Interval"
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False,name='Upper Bound'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False,name='Lower Bound')
         ])
-        
+
+    elif plot_mc:
+        df_scaled = pd.DataFrame(memory['scaled_df'])
+        mask_df = pd.DataFrame(memory['mask'], dtype='float32')
+        # Only compute MC dropout for the single selected patient
+        single_input = paddle.to_tensor(df_scaled.values[i:i+1].astype('float32'))
+        single_mask = paddle.to_tensor(mask_df.values[i:i+1].astype('float32'))
+        mc_lo, mc_hi, mc_mean = mc_dropout_predict(model_copy, single_input, single_mask, label='Mortality Curve')
+        lower = np.clip(mc_lo[0, :10], 0, 1).tolist()
+        upper = np.clip(mc_hi[0, :10], 0, 1).tolist()
+        mc_mean_vals = mc_mean[0, :10].tolist()
+        has_interval = True
+
+        fig.add_traces([
+            go.Scatter(
+                x=x + x[::-1],
+                y=upper + lower[::-1],
+                fill='toself',
+                fillcolor='rgba(40, 167, 69, 0.2)',
+                line=dict(color='rgba(255,255,255,0)'),
+                hoverinfo="skip",
+                showlegend=True,
+                name=f'MC Dropout {int((1-alpha_value)*100)}% Interval'
+            ),
+            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, name='MC Upper'),
+            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, name='MC Lower'),
+            go.Scatter(x=x, y=mc_mean_vals, mode='lines+markers', name='MC Mean',
+                       line=dict(color='rgba(40, 167, 69, 0.8)', width=2, dash='dot'),
+                       marker=dict(size=5, color='rgba(40, 167, 69, 0.8)'),
+                       visible='legendonly')
+        ])
 
     fig.update_layout(
         title=dict(text=f'Cumulative Mortality Risk — Patient {i + 1}',
@@ -1258,12 +1709,14 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_enable
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
-        legend=dict(bgcolor="rgba(255,255,255,0.85)",
-                    bordercolor="#dee2e6", borderwidth=1),
-        margin=dict(t=60, b=50, l=60, r=20),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
+                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1),
+        margin=dict(t=60, b=95, l=60, r=20),
         hovermode="x unified",
+        height=185 if (window_width is not None and window_width < 768) else 300,
     )
-    return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if plot_interval else None
+    kpi_cards = create_kpi_cards(y, lower, upper)
+    return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if has_interval else None
 
 
 @app.callback(
@@ -1286,9 +1739,10 @@ def control_interval_visibility(alpha_value, memory_calibration, active_cell):
     Output('trajectory-plot', 'children'),
     Input('x-table', 'active_cell'),
     State('memory-predictions', 'data'),
+    State('window-width-store', 'data'),
     prevent_initial_call=True
 )
-def plot_trajectory(active_cell, memory):
+def plot_trajectory(active_cell, memory, window_width):
     if not active_cell or not memory:
         raise dash.exceptions.PreventUpdate
 
@@ -1296,7 +1750,7 @@ def plot_trajectory(active_cell, memory):
     coefficients_data = memory['coefficients']
     coeffcients = [paddle.to_tensor(np.array(c), dtype='float32') for c in coefficients_data]
 
-    fig = create_trajectory_plot(i, coeffcients)
+    fig = create_trajectory_plot(i, coeffcients, window_width=window_width)
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()]
 
 @app.callback(
@@ -1409,10 +1863,13 @@ def toggle_offcanvas(open_clicks, update_clicks, is_open):
     Output('alpha-container-updated', 'style'),
     Input('update-shap-button', 'n_clicks'),
     Input('memory-calibration', 'data'),
+    Input('interval-method-selector', 'value'),
     State('current-patient-index', 'data'),
     State('update-ran', 'data'),
 )
-def toggle_slider_visibility_updated(n_clicks, calib_data, index, update_ran):
+def toggle_slider_visibility_updated(n_clicks, calib_data, interval_method, index, update_ran):
+    if interval_method != 'conformal':
+        return {"display": "none"}
     if calib_data is not None and index is not None and (n_clicks is not None or update_ran):
         return {"display": "block", "marginTop": "20px"}
     return {"display": "none"}
@@ -1427,15 +1884,18 @@ def toggle_slider_visibility_updated(n_clicks, calib_data, index, update_ran):
     State('editable-table', 'data'),
     State('current-patient-index', 'data'),
     State('Current-mortality', 'data'),
-    State('interval-enabled-updated', 'data'),
+    State('interval-method-selector', 'value'),
     State('memory-predictions', 'data'),
+    State('window-width-store', 'data'),
     prevent_initial_call=True
 )
-def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, index, current_mortality, interval_enabled_updated, memory_current):
+def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, index, current_mortality, interval_method, memory_current, window_width):
     alpha_value = 0.05 if alpha_value is None else float(alpha_value)
     alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
 
-    plot_interval = bool(memory_calibration is not None and interval_enabled_updated)
+    selected_method = interval_method or ('conformal' if memory_calibration is not None else 'mc')
+    plot_interval = bool(selected_method == 'conformal' and memory_calibration is not None)
+    plot_mc = bool(selected_method == 'mc')
 
     if not edited_data or index is None:
         raise dash.exceptions.PreventUpdate
@@ -1543,7 +2003,64 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
             go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False,name='Lower Bound')
         ])
 
+    elif plot_mc:
+        # MC Dropout intervals for original patient
+        df_scaled = pd.DataFrame(memory_current['scaled_df'])
+        mask_orig = pd.DataFrame(memory_current['mask'], dtype='float32')
+        i = index
+        orig_input = paddle.to_tensor(df_scaled.values[i:i+1].astype('float32'))
+        orig_mask = paddle.to_tensor(mask_orig.values[i:i+1].astype('float32'))
+        lower_orig, upper_orig, mc_mean_orig = mc_dropout_predict(model_copy, orig_input, orig_mask, alpha=alpha_value, label='Original Patient')
+        lower_orig = lower_orig[0, :10]
+        upper_orig = upper_orig[0, :10]
+        mc_mean_orig = mc_mean_orig[0, :10]
 
+        fig.add_traces([
+            go.Scatter(
+                x=np.concatenate([x, x[::-1]]),
+                y=np.concatenate([upper_orig, lower_orig[::-1]]),
+                fill='toself',
+                fillcolor='rgba(0, 123, 255, 0.2)',
+                line=dict(color='rgba(255,255,255,0)'),
+                hoverinfo="skip",
+                showlegend=True,
+                name=f"Original MC {int((1 - alpha_value) * 100)}% Interval"
+            ),
+            go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, name='Upper Bound'),
+            go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, name='Lower Bound'),
+            go.Scatter(x=x, y=mc_mean_orig.tolist(), mode='lines+markers', name='Original MC Mean',
+                       line=dict(color='rgba(0, 123, 255, 0.8)', width=2, dash='dot'),
+                       marker=dict(size=5, color='rgba(0, 123, 255, 0.8)'),
+                       visible='legendonly')
+        ])
+
+        # MC Dropout intervals for updated patient
+        lower_upd, upper_upd, mc_mean_upd = mc_dropout_predict(model_copy, input_tensor, mask_tensor, alpha=alpha_value, label='Updated Patient')
+        lower_upd = lower_upd[0, :10]
+        upper_upd = upper_upd[0, :10]
+        mc_mean_upd = mc_mean_upd[0, :10]
+
+        fig.add_traces([
+            go.Scatter(
+                x=np.concatenate([x, x[::-1]]),
+                y=np.concatenate([upper_upd, lower_upd[::-1]]),
+                fill='toself',
+                fillcolor='rgba(255, 0, 0, 0.2)',
+                line=dict(color='rgba(255,255,255,0)'),
+                hoverinfo="skip",
+                showlegend=True,
+                name=f"Updated MC {int((1 - alpha_value) * 100)}% Interval"
+            ),
+            go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, name='Upper Bound'),
+            go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, name='Lower Bound'),
+            go.Scatter(x=x, y=mc_mean_upd.tolist(), mode='lines+markers', name='Updated MC Mean',
+                       line=dict(color='rgba(255, 0, 0, 0.8)', width=2, dash='dot'),
+                       marker=dict(size=5, color='rgba(255, 0, 0, 0.8)'),
+                       visible='legendonly')
+        ])
+
+    # 手机端高度调整（进一步缩小）
+    mobile_height = 185 if (window_width is not None and window_width < 768) else 300
 
     fig.update_layout(
         title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
@@ -1557,12 +2074,22 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
-        legend=dict(bgcolor="rgba(255,255,255,0.85)",
-                    bordercolor="#dee2e6", borderwidth=1),
-        margin=dict(t=60, b=50, l=60, r=20),
+        legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
+                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1),
+        margin=dict(t=60, b=95, l=60, r=20),
         hovermode="x unified",
+        height=mobile_height
     )
-    return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], {'coefficients': coefficients_np} 
+    interval_lower = None
+    interval_upper = None
+    if plot_interval:
+        interval_lower = lower_update
+        interval_upper = upper_update
+    elif plot_mc:
+        interval_lower = lower_upd.tolist()
+        interval_upper = upper_upd.tolist()
+    kpi_cards = create_kpi_cards(y, interval_lower, interval_upper, accent_color="#C8102E")
+    return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], {'coefficients': coefficients_np} 
 
 
 @app.callback(
@@ -1583,13 +2110,13 @@ def control_interval_visibility_updated(alpha_value, memory_calibration, n_click
 
 @app.callback(
     Output('trajectory-plot-updated', 'children'),
-    Input('Current-coefficients', 'data'),  
+    Input('Current-coefficients', 'data'),
     State('memory-predictions', 'data'),
     State('current-patient-index', 'data'),
+    State('window-width-store', 'data'),
     prevent_initial_call=True
 )
-
-def update_plot_trajectory(memory_coefficients, memory, index):
+def update_plot_trajectory(memory_coefficients, memory, index, window_width):
     if memory_coefficients is None or index is None:
         raise dash.exceptions.PreventUpdate
     coefficients_data = memory['coefficients']
@@ -1598,7 +2125,7 @@ def update_plot_trajectory(memory_coefficients, memory, index):
     updated_coeffcients_data = memory_coefficients['coefficients']
     updated_coeffcients = [paddle.to_tensor(np.array(c), dtype='float32') for c in updated_coeffcients_data]
 
-    fig = create_trajectory_plot(index, coeffcients, updated_coeffcients=updated_coeffcients)
+    fig = create_trajectory_plot(index, coeffcients, updated_coeffcients=updated_coeffcients, window_width=window_width)
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()]
 
 @app.callback(
@@ -1771,7 +2298,18 @@ def search_feature_columns(search, clear_clicks, row_data):
     return (filtered if filtered else all_cols), dash.no_update
 
 
+# Capture browser window width once on page load
+app.clientside_callback(
+    """
+    function(_) {
+        return window.innerWidth;
+    }
+    """,
+    Output('window-width-store', 'data'),
+    Input('window-width-store', 'id'),
+)
+
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 8080))
-    app.run(debug=False, host='0.0.0.0', port=port)
+    app.run(debug=False, host='0.0.0.0', port=port, threaded=True)
 
