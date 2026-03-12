@@ -2382,22 +2382,24 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         y_current = np.asarray(current_mortality, dtype=np.float64)[:display_horizon]
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
-    legend_entry_width = 120 if is_mobile else None
+    legend_entry_width = 95 if is_mobile else None
     show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     margin_left = 38 if is_mobile else 60
     margin_right = 8 if is_mobile else 20
+    orig_curve_name = 'Orig' if is_mobile else 'Original'
+    upd_curve_name = 'Upd' if is_mobile else 'Updated'
     
     x = list(range(1, len(y)+1))
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
-        x=x, y=y_current, mode='lines+markers', name='Original',
+        x=x, y=y_current, mode='lines+markers', name=orig_curve_name,
         line=dict(color="#0067B1", width=2.5),
         marker=dict(size=7, color="#0067B1", line=dict(color="white", width=1.5))
     ))
     fig.add_trace(go.Scatter(
-        x=x, y=y, mode='lines+markers', name='Updated',
+        x=x, y=y, mode='lines+markers', name=upd_curve_name,
         line=dict(color="#C8102E", width=2.5),
         marker=dict(size=7, color="#C8102E", line=dict(color="white", width=1.5))
     ))
@@ -2458,7 +2460,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Orig int {int((1 - alpha_value) * 100)}%"
+                name=f"Orig int {int((1 - alpha_value) * 100)}%" if not is_mobile else f"Orig int"
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2473,7 +2475,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Upd int {int((1 - alpha_value) * 100)}%"
+                name=f"Upd int {int((1 - alpha_value) * 100)}%" if not is_mobile else f"Upd int"
             ),
             go.Scatter(x=x, y=upper_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2500,7 +2502,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Orig band {int((1 - alpha_value) * 100)}%"
+                name=f"Orig band {int((1 - alpha_value) * 100)}%" if not is_mobile else "Orig band"
             ),
             go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
@@ -2525,7 +2527,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Upd band {int((1 - alpha_value) * 100)}%"
+                name=f"Upd band {int((1 - alpha_value) * 100)}%" if not is_mobile else "Upd band"
             ),
             go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
