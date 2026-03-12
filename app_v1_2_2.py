@@ -85,8 +85,33 @@ with open("./utils/saved_explainers/explainer_v2.14.2.dill","rb") as f:
     explainer = dill.load(f)
 explainer.model.f.__globals__['model'] = model
 
-# Global MC Dropout progress tracking
+# Global simultaneous uncertainty band progress tracking
 mc_progress = {'current': 0, 'total': 0, 'running': False, 'eta': '', 'label': ''}
+
+# Long-horizon risk-support table for mortality simultaneous uncertainty band
+# t is in years.
+DEFAULT_N_RISK_TABLE = {
+    0: 598,
+    1: 598,
+    2: 543,
+    3: 484,
+    4: 409,
+    5: 365,
+    6: 318,
+    7: 278,
+    8: 239,
+    9: 214,
+    10: 189,
+    11: 167,
+    12: 139,
+    13: 112,
+    14: 90,
+    15: 64,
+}
+
+DEFAULT_LONG_HORIZON_GAMMA = 0
+DEFAULT_LONG_HORIZON_START_YEAR = 1
+DEFAULT_MORTALITY_DISPLAY_HORIZON = 10
 
 #######################refine utility functions for the app ###########################
 
@@ -95,21 +120,19 @@ def create_kpi_cards(mortality_values, lower_bounds=None, upper_bounds=None, acc
     lower = None if lower_bounds is None else np.asarray(lower_bounds, dtype=np.float64).reshape(-1)
     upper = None if upper_bounds is None else np.asarray(upper_bounds, dtype=np.float64).reshape(-1)
 
-    def pct_at(year_idx):
+    def risk_with_bounds_at(year_idx):
         if year_idx < len(values):
-            return f"{values[year_idx] * 100:.1f}%"
+            risk_text = f"{values[year_idx] * 100:.1f}%"
+            if lower is not None and upper is not None and year_idx < len(lower) and year_idx < len(upper):
+                return f"{risk_text} [{lower[year_idx] * 100:.1f}%, {upper[year_idx] * 100:.1f}%]"
+            return risk_text
         return "—"
 
-    def width_at(year_idx):
-        if lower is None or upper is None or year_idx >= len(lower) or year_idx >= len(upper):
-            return "—"
-        return f"{max(0.0, upper[year_idx] - lower[year_idx]) * 100:.1f}%"
-
     cards = [
-        ("1-Year Risk", pct_at(0)),
-        ("5-Year Risk", pct_at(4)),
-        ("10-Year Risk", pct_at(9)),
-        ("10-Year Interval Width", width_at(9)),
+        ("3-Year Risk", risk_with_bounds_at(2)),
+        ("5-Year Risk", risk_with_bounds_at(4)),
+        ("8-Year Risk", risk_with_bounds_at(7)),
+        ("10-Year Risk", risk_with_bounds_at(9)),
     ]
 
     return html.Div([
@@ -120,7 +143,67 @@ def create_kpi_cards(mortality_values, lower_bounds=None, upper_bounds=None, acc
         for label, value in cards
     ], className="kpi-row")
 
-def create_trajectory_plot(person_id, coeffcients, updated_coeffcients=None, window_width=None):
+
+def build_long_horizon_weights(
+    horizon_len,
+    gamma=DEFAULT_LONG_HORIZON_GAMMA,
+    n_risk_table=None,
+    start_year=DEFAULT_LONG_HORIZON_START_YEAR,
+):
+    """Build long-horizon penalty weights.
+
+        Year indexing follows the app horizon:
+            - Year 1 uses n_risk(t=0)
+            - Year y uses n_risk(t=y-1)
+
+        For year >= start_year,
+        w(year) = (n_risk(0) / max(n_risk(t=year-1), 1))^gamma.
+    """
+    if horizon_len <= 0:
+        return np.ones((0,), dtype=np.float32)
+
+    table = DEFAULT_N_RISK_TABLE if n_risk_table is None else n_risk_table
+    table = {int(k): max(int(v), 1) for k, v in table.items()}
+
+    if 0 not in table:
+        min_key = min(table.keys())
+        table[0] = table[min_key]
+
+    n0 = max(int(table.get(0, 1)), 1)
+    gamma = float(max(0.0, gamma))
+    start_year = int(max(1, start_year))
+
+    sorted_keys = sorted(table.keys())
+    last_n = n0
+    weights = []
+    for year in range(1, horizon_len + 1):
+        if year < start_year:
+            weights.append(1.0)
+            continue
+
+        t_idx = year - 1
+        if t_idx in table:
+            last_n = table[t_idx]
+        else:
+            for k in sorted_keys:
+                if k <= t_idx:
+                    last_n = table[k]
+                else:
+                    break
+        wt = (n0 / max(last_n, 1)) ** gamma
+        weights.append(wt)
+
+    return np.asarray(weights, dtype=np.float32)
+
+def create_trajectory_plot(
+    person_id,
+    coeffcients,
+    updated_coeffcients=None,
+    window_width=None,
+    original_band=None,
+    updated_band=None,
+    alpha=0.05,
+):
     batch_basis_eval_tensor = paddle.to_tensor(batch_basis_eval, dtype='float32')
     pred_time = np.linspace(0, 3, 100)
     num_variables = 12
@@ -155,12 +238,38 @@ def create_trajectory_plot(person_id, coeffcients, updated_coeffcients=None, win
         curve = paddle.matmul(coeffs_person, basis_tensor_person).squeeze(0).numpy()
         curve = curve * std_list[var_idx] + mean_list[var_idx]
         curve = np.clip(curve, 0, None)  # values cannot be negative
+        lo = None
+        up = None
 
         showlegend_indicator = (var_idx == 0) if updated_coeffcients is not None else False
+
+        if original_band is not None:
+            lo = np.asarray(original_band['lower'][var_idx], dtype=np.float64)
+            up = np.asarray(original_band['upper'][var_idx], dtype=np.float64)
+            fig.add_trace(
+                go.Scatter(
+                    x=np.concatenate([pred_time, pred_time[::-1]]),
+                    y=np.concatenate([up, lo[::-1]]),
+                    fill='toself',
+                    fillcolor='rgba(59,130,246,0.16)',
+                    line=dict(color='rgba(255,255,255,0)'),
+                    hoverinfo='skip',
+                    name=f"Original simultaneous uncertainty band {int((1-alpha)*100)}%",
+                    showlegend=(var_idx == 0),
+                ),
+                row=row, col=col
+            )
+
+        original_customdata = np.column_stack([lo, up]) if lo is not None and up is not None else None
+        original_hover = "%{y:.2f} [%{customdata[0]:.2f}, %{customdata[1]:.2f}]<extra>%{fullData.name}</extra>" if original_customdata is not None else "%{y:.2f}<extra>%{fullData.name}</extra>"
         fig.add_trace(
-            go.Scatter(x=pred_time, y=curve, mode='lines', name='Original',
-                       showlegend=showlegend_indicator,
-                       line=dict(color=COLOR_ORIGINAL, width=2)),
+            go.Scatter(
+                x=pred_time, y=curve, mode='lines', name='Original',
+                showlegend=showlegend_indicator,
+                line=dict(color=COLOR_ORIGINAL, width=2),
+                customdata=original_customdata,
+                hovertemplate=original_hover,
+            ),
             row=row, col=col
         )
 
@@ -169,11 +278,36 @@ def create_trajectory_plot(person_id, coeffcients, updated_coeffcients=None, win
             updated_curve = paddle.matmul(updated_coeffs_var, basis_tensor_person).squeeze(0).numpy()
             updated_curve = updated_curve * std_list[var_idx] + mean_list[var_idx]
             updated_curve = np.clip(updated_curve, 0, None)  # values cannot be negative
+            lo_u = None
+            up_u = None
 
+            if updated_band is not None:
+                lo_u = np.asarray(updated_band['lower'][var_idx], dtype=np.float64)
+                up_u = np.asarray(updated_band['upper'][var_idx], dtype=np.float64)
+                fig.add_trace(
+                    go.Scatter(
+                        x=np.concatenate([pred_time, pred_time[::-1]]),
+                        y=np.concatenate([up_u, lo_u[::-1]]),
+                        fill='toself',
+                        fillcolor='rgba(249,115,22,0.16)',
+                        line=dict(color='rgba(255,255,255,0)'),
+                        hoverinfo='skip',
+                        name=f"Updated simultaneous uncertainty band {int((1-alpha)*100)}%",
+                        showlegend=(var_idx == 0),
+                    ),
+                    row=row, col=col
+                )
+
+            updated_customdata = np.column_stack([lo_u, up_u]) if lo_u is not None and up_u is not None else None
+            updated_hover = "%{y:.2f} [%{customdata[0]:.2f}, %{customdata[1]:.2f}]<extra>%{fullData.name}</extra>" if updated_customdata is not None else "%{y:.2f}<extra>%{fullData.name}</extra>"
             fig.add_trace(
-                go.Scatter(x=pred_time, y=updated_curve, mode='lines', name='Updated',
-                           showlegend=showlegend_indicator,
-                           line=dict(color=COLOR_UPDATED, width=2)),
+                go.Scatter(
+                    x=pred_time, y=updated_curve, mode='lines', name='Updated',
+                    showlegend=showlegend_indicator,
+                    line=dict(color=COLOR_UPDATED, width=2),
+                    customdata=updated_customdata,
+                    hovertemplate=updated_hover,
+                ),
                 row=row, col=col
             )
 
@@ -181,7 +315,7 @@ def create_trajectory_plot(person_id, coeffcients, updated_coeffcients=None, win
         if row == num_rows:
             fig.update_xaxes(title_text="Years", title_font=dict(size=10), row=row, col=col)
         if col == 1:
-            fig.update_yaxes(title_text="Values", title_font=dict(size=10), row=row, col=col)
+            fig.update_yaxes(title_text="Values", title_font=dict(size=10), title_standoff=2, row=row, col=col)
 
     fig.update_layout(
         height=fig_height,
@@ -194,7 +328,8 @@ def create_trajectory_plot(person_id, coeffcients, updated_coeffcients=None, win
         margin=dict(t=80, b=50, l=50, r=20),
         legend=dict(
             orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1,
-            bgcolor="rgba(255,255,255,0.85)", bordercolor="#dee2e6", borderwidth=1
+            bgcolor="rgba(255,255,255,0.85)", bordercolor="#dee2e6", borderwidth=1,
+            font=dict(size=10), itemsizing="constant"
         ),
     )
     fig.update_annotations(font=dict(size=10, color="#555"))
@@ -281,7 +416,7 @@ def conformal_mortality_prediction(
     E_train,
     T_train,
     X_and_mask_test,
-    max_horizon=10,
+    max_horizon=15,
     alpha=0.05
 ):
     X_and_mask = np.asarray(X_and_mask, dtype=np.float32)
@@ -347,19 +482,33 @@ def conformal_mortality_prediction(
     }
 
 
-def mc_dropout_predict(model_obj, input_tensor, mask_tensor, n_samples=1000, alpha=0.05, label='', mc_dropout_p=0.01):
-    """Run MC Dropout to get prediction intervals without calibration data.
+def mc_dropout_predict(
+    model_obj,
+    input_tensor,
+    mask_tensor,
+    n_samples=1000,
+    alpha=0.05,
+    label='',
+    mc_dropout_p=0.01,
+    long_horizon_gamma=DEFAULT_LONG_HORIZON_GAMMA,
+    long_horizon_start_year=DEFAULT_LONG_HORIZON_START_YEAR,
+    n_risk_table=None,
+):
+    """Run simultaneous uncertainty band sampling and construct log-log bands on CIF scale.
+
+    Steps:
+        1) Generate MC CIF curves F^(m)(t)
+        2) Transform with g(F) = log(-log(1-F))
+           3) Compute se_Y(t) = sd(Y^(1)(t), ..., Y^(M)(t))
+          4) Baseline standardized process Z_base^(m)(t) = (Y^(m)(t)-Y(t))/se_Y(t)
+          5) S^(m) = max_t |Z_base^(m)(t)| and c_{1-alpha} = quantile(S, 1-alpha)
+          6) Long-horizon penalty: se_tilde(t) = w(t) * se_Y(t),
+              w(t) = (n_risk(0) / max(n_risk(t), 1))^gamma
+          7) Band on transformed scale: Y +/- c*se_tilde
+        7) Back-transform: F = 1 - exp(-exp(Y))
+
     Uses forward() directly instead of predict(), because predict() calls
     self.eval() internally which disables dropout.
-
-    mc_dropout_p: drop rate used during MC inference (default 0.01).
-        Two dropout sources exist in forward():
-          1. nn.Dropout sublayers (p = 1-keep_prob = 0.27  at train time)
-          2. F.dropout(out, p=self.keep_prob) — note: F.dropout's p is the DROP
-             rate, so with keep_prob=0.73 this was actually dropping 73 % of
-             neurons, far more aggressive than intended.
-        Both are patched to mc_dropout_p so each MC sample is close to the mean
-        prediction while preserving stochasticity for functional-depth bands.
     """
     # Save random state, set fixed seed for reproducibility, then restore
     np_state = np.random.get_state()
@@ -404,24 +553,121 @@ def mc_dropout_predict(model_obj, input_tensor, mask_tensor, n_samples=1000, alp
     np.random.set_state(np_state)
     mc_progress.update({'current': n_samples, 'running': False, 'eta': '', 'label': ''})
 
-    all_preds = np.stack(predictions_list, axis=0)  # (n_samples, batch, time)
+    all_preds = np.stack(predictions_list, axis=0)  # (M, B, T)
     mean = np.clip(np.mean(all_preds, axis=0), 0, 1)
 
-    # Functional band depth CI (Modified Band Depth, J=2)
-    n, B, T = all_preds.shape
-    ranks = np.argsort(np.argsort(all_preds, axis=0), axis=0) + 1  # (n, B, T)
-    depth = np.sum((ranks - 1) * (n - ranks), axis=2)  # (n, B)
+    # Log-log transform g(F)=log(-log(1-F)) and inverse g^{-1}(Y)=1-exp(-exp(Y))
+    eps = 1e-6
+    alpha = float(np.clip(alpha, 1e-6, 0.999))
+    F_mc = np.clip(all_preds, eps, 1.0 - eps)
+    Y_mc = np.log(-np.log(1.0 - F_mc))
 
-    n_keep = max(1, int(n * (1 - alpha)))
-    lower = np.zeros((B, T), dtype=np.float32)
-    upper = np.zeros((B, T), dtype=np.float32)
-    for b in range(B):
-        keep_idx = np.argsort(depth[:, b])[::-1][:n_keep]
-        kept = all_preds[keep_idx, b, :]
-        lower[b] = np.clip(kept.min(axis=0), 0, 1)
-        upper[b] = np.clip(kept.max(axis=0), 0, 1)
+    F_hat = np.clip(mean, eps, 1.0 - eps)
+    Y_hat = np.log(-np.log(1.0 - F_hat))
+
+    se_Y_base = np.std(Y_mc, axis=0, ddof=1)
+    se_Y_base = np.maximum(se_Y_base, eps)
+
+    # Compute simultaneous-band critical value on baseline scale first.
+    # This keeps short-horizon widths unchanged when w(t)=1 (e.g., year 1).
+    Z_base = (Y_mc - Y_hat[None, :, :]) / se_Y_base[None, :, :]
+    S = np.max(np.abs(Z_base), axis=2)  # (M, B)
+    c = np.quantile(S, 1.0 - alpha, axis=0, method='linear')  # (B,)
+
+    # Long-horizon penalty based on training-set risk support:
+    # se_tilde_i(t) = w(t) * se_i(t), where t starts at year 1.
+    horizon_len = se_Y_base.shape[1]
+    w = build_long_horizon_weights(
+        horizon_len=horizon_len,
+        gamma=long_horizon_gamma,
+        n_risk_table=n_risk_table,
+        start_year=long_horizon_start_year,
+    )
+    se_Y = np.maximum(se_Y_base * w[None, :], eps)
+
+    L_Y = Y_hat - c[:, None] * se_Y
+    U_Y = Y_hat + c[:, None] * se_Y
+
+    lower = 1.0 - np.exp(-np.exp(L_Y))
+    upper = 1.0 - np.exp(-np.exp(U_Y))
+    lower = np.clip(lower, 0.0, 1.0).astype(np.float32)
+    upper = np.clip(upper, 0.0, 1.0).astype(np.float32)
 
     return lower, upper, mean
+
+
+def mc_dropout_trajectory_band(model_obj, input_tensor, mask_tensor, person_id, n_samples=1000, alpha=0.05, mc_dropout_p=0.01, label='Trajectory'):
+    """MC simultaneous band for trajectories using standardized sup-process.
+
+    Constructs, for each variable independently:
+      Z^(m)(t) = (Y^(m)(t) - Y(t)) / se_Y(t),
+      S^(m)    = max_t |Z^(m)(t)|,
+      c_{1-a}  = quantile(S, 1-a),
+      band     = Y(t) ± c_{1-a} se_Y(t).
+    """
+    global mc_progress
+    np_state = np.random.get_state()
+    np.random.seed(42)
+    paddle.seed(42)
+
+    dropout_layers = [m for m in model_obj.sublayers() if isinstance(m, paddle.nn.Dropout)]
+    original_p = [m.p for m in dropout_layers]
+    for m in dropout_layers:
+        m.p = mc_dropout_p
+    original_keep_prob = model_obj.keep_prob
+    model_obj.keep_prob = mc_dropout_p
+
+    batch_basis_eval_tensor = paddle.to_tensor(batch_basis_eval, dtype='float32')
+    num_variables = 12
+    eps = 1e-6
+    alpha = float(np.clip(alpha, 1e-6, 0.999))
+
+    curves_mc = []
+    mc_progress.update({'current': 0, 'total': n_samples, 'running': True, 'eta': '', 'label': label})
+    t_start = time.time()
+    model_obj.train()
+    for i in range(n_samples):
+        with paddle.no_grad():
+            _, coeffs_sample = model_obj.forward(input_tensor, mask_tensor)
+
+        one_sample_curves = np.zeros((num_variables, 100), dtype=np.float32)
+        for var_idx in range(num_variables):
+            basis_tensor_var = batch_basis_eval_tensor[:, var_idx, :, :]
+            basis_tensor_person = basis_tensor_var[person_id]
+            coeffs_person = coeffs_sample[var_idx][0].unsqueeze(0)
+            curve = paddle.matmul(coeffs_person, basis_tensor_person).squeeze(0).numpy()
+            curve = curve * std_list[var_idx] + mean_list[var_idx]
+            curve = np.clip(curve, 0, None)
+            one_sample_curves[var_idx] = curve.astype(np.float32)
+        curves_mc.append(one_sample_curves)
+        if (i + 1) % 5 == 0 or i == n_samples - 1:
+            elapsed = time.time() - t_start
+            rate = (i + 1) / elapsed if elapsed > 0 else 0
+            remaining = (n_samples - i - 1) / rate if rate > 0 else 0
+            mc_progress.update({'current': i + 1, 'eta': f'{remaining:.1f}s'})
+
+    model_obj.eval()
+    for m, p in zip(dropout_layers, original_p):
+        m.p = p
+    model_obj.keep_prob = original_keep_prob
+    np.random.set_state(np_state)
+    mc_progress.update({'current': n_samples, 'running': False, 'eta': '', 'label': ''})
+
+    curves_mc = np.stack(curves_mc, axis=0)  # (M, V, T)
+    center = np.mean(curves_mc, axis=0)
+    se = np.std(curves_mc, axis=0, ddof=1)
+    se = np.maximum(se, eps)
+
+    Z = (curves_mc - center[None, :, :]) / se[None, :, :]
+    S = np.max(np.abs(Z), axis=2)  # (M, V)
+    c = np.quantile(S, 1.0 - alpha, axis=0, method='linear')  # (V,)
+
+    lower = center - c[:, None] * se
+    upper = center + c[:, None] * se
+    lower = np.clip(lower, 0.0, None).astype(np.float32)
+    upper = np.clip(upper, 0.0, None).astype(np.float32)
+
+    return lower, upper, center
 
 
 def get_waterfall_base64(X_and_mask_eval,df_combined_with_mask_eval,index, order=None):
@@ -561,6 +807,7 @@ app.index_string = """
                 display: grid;
                 grid-template-columns: repeat(4, minmax(0, 1fr));
                 gap: 12px;
+                margin-top: 10px;
                 margin-bottom: 14px;
             }
             .kpi-card {
@@ -630,7 +877,7 @@ app.index_string = """
                 .app-header-main  { flex-direction: column !important; align-items: stretch !important; width: 100% !important; }
         .app-header-text  { width: 100% !important; flex: 0 0 100% !important; max-width: 100% !important; }
         .app-header-text > div { width: 100% !important; }
-                .app-header-logo  { margin-left: 0 !important; margin-top: 10px !important; align-self: flex-start !important; }
+                .app-header-logo  { margin-left: 0 !important; margin-top: 10px !important; align-self: flex-end !important; }
                 .app-header-logo img { height: 34px !important; }
 
         /* card body padding */
@@ -720,7 +967,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                              "marginLeft": "0.4rem"}),
                         ], style={"display": "flex", "alignItems": "center", "flexWrap": "wrap"}),
                         html.P(
-                            "Multi-Task DeepHit v2.14  ·  Flexible Prediction Intervals  ·  SHAP Explainability",
+                            "App v1.3  ·  Model: Multi-Task DeepHit v2.14  ·  Flexible Prediction Intervals  ·  SHAP Explainability",
                             className="app-header-sub",
                             style={"color": "rgba(255,255,255,.65)", "marginTop": "6px",
                                    "fontSize": "0.85rem", "marginBottom": "0"}
@@ -816,7 +1063,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                         id='interval-method-selector',
                         options=[
                             {'label': 'Conformal Prediction (Addiitonal calibration data required)', 'value': 'conformal'},
-                            {'label': 'MC Rollout(No need calibration data)', 'value': 'mc'},
+                            {'label': 'Simultaneous uncertainty band (No calibration data needed)', 'value': 'mc'},
                             {'label': 'No interval (curve only)', 'value': 'none'},
                         ],
                         value='mc',
@@ -884,7 +1131,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                     ], className="mb-2") for n, txt in [
                         (1, "Download Example CSV for the required format."),
                         (2, "Upload a CSV with 68 numeric columns."),
-                        (3, "Choose a prediction interval method (Conformal / MC Rollout / None)."),
+                        (3, "Choose a prediction interval method (Conformal / Simultaneous uncertainty band / None)."),
                         (4, "If Conformal is selected, upload calibration CSV in the same panel."),
                         (5, "Click a patient row to view results in all sections:"),
                     ]],
@@ -940,18 +1187,18 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 children=[
                                     dbc.Label([
                                         html.I(className="fas fa-sliders-h me-2 text-primary"),
-                                        "Conformal Prediction Level (1 − α)"
+                                        "Uncertainty Level (1 − α)"
                                     ], style={"fontWeight": "600", "marginBottom": "6px"}),
                                     dcc.Slider(
                                         id='alpha-slider', min=0.01, max=0.5, step=0.01, value=0.05,
                                         marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
                                                0.2: '80%', 0.3: '70%', 0.5: '50%'},
-                                        tooltip={"placement": "bottom", "always_visible": True}
+                                        tooltip={"placement": "bottom", "always_visible": False}
                                     )
                                 ],
                                     style={"display": "none",
                                         "background": "linear-gradient(180deg, #f7fbff 0%, #edf5ff 100%)", "borderRadius": "12px",
-                                        "padding": "16px", "marginBottom": "24px",
+                                        "padding": "10px 12px", "marginBottom": "12px",
                                          "overflow": "visible", "position": "relative", "zIndex": 20,
                                          "border": "1px solid rgba(198,218,242,.95)",
                                          "boxShadow": "0 6px 18px rgba(20,66,114,.06)"}
@@ -976,18 +1223,18 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
                                 children=[
                                     dbc.Label([
                                         html.I(className="fas fa-sliders-h me-2 text-primary"),
-                                        "Conformal Prediction Level (1 − α) — Updated Patient"
+                                        "Uncertainty Level (1 − α) — Updated Patient"
                                     ], style={"fontWeight": "600", "marginBottom": "6px"}),
                                     dcc.Slider(
                                         id='alpha-slider-updated', min=0.01, max=0.5, step=0.01, value=0.05,
                                         marks={0.01: '99%', 0.05: '95%', 0.1: '90%',
                                                0.2: '80%', 0.3: '70%', 0.5: '50%'},
-                                        tooltip={"placement": "bottom", "always_visible": True}
+                                        tooltip={"placement": "bottom", "always_visible": False}
                                     )
                                 ],
                                     style={"display": "none",
                                         "background": "linear-gradient(180deg, #fff8f8 0%, #fff0f0 100%)", "borderRadius": "12px",
-                                        "padding": "16px", "marginTop": "10px", "marginBottom": "24px",
+                                        "padding": "10px 12px", "marginTop": "8px", "marginBottom": "12px",
                                          "overflow": "visible", "position": "relative", "zIndex": 20,
                                          "border": "1px solid rgba(244,210,210,.95)",
                                          "boxShadow": "0 6px 18px rgba(122,40,40,.05)"}
@@ -1008,6 +1255,14 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
 
                         # ── Section 3: Risk Factor Trajectories ─────────────
                         dbc.AccordionItem([
+                            html.Div(id='traj-progress-container', children=[
+                                html.Div(id='traj-progress-label', style={
+                                    "fontSize": "0.8rem", "fontWeight": "600", "color": "#155724", "marginBottom": "4px"
+                                }),
+                                dbc.Progress(id='traj-progress-bar', value=0, striped=True, animated=True,
+                                             style={"height": "16px", "borderRadius": "8px"}, className="mb-1"),
+                                html.Div(id='traj-progress-eta', style={"fontSize": "0.75rem", "color": "#888"}),
+                            ], style={"marginBottom": "10px", "display": "none"}),
                             html.Div(id='wrap-trajectory',
                                      children=dcc.Loading(id='loading-trajectory', type='dot',
                                                           custom_spinner=html.Div([
@@ -1165,7 +1420,7 @@ app.layout = dbc.Container(fluid=True, style={"padding": "0 20px 20px"}, childre
             html.Span("  ·  ", style={"opacity": ".5"}),
             html.Span([
                 html.I(className="fas fa-tag me-2"),
-                "v1.2.2"
+                "v1.3"
             ]),
         ])
     ))
@@ -1280,7 +1535,7 @@ def update_interval_method_selector(calib_data, current_method):
     has_calib = calib_data is not None
     options = [
         {'label': 'Conformal Prediction (Addiitonal calibration data required)', 'value': 'conformal'},
-        {'label': 'MC Rollout(No need calibration data)', 'value': 'mc'},
+        {'label': 'Simultaneous uncertainty band (No calibration data needed)', 'value': 'mc'},
         {'label': 'No interval (curve only)', 'value': 'none'},
     ]
 
@@ -1324,6 +1579,11 @@ app.clientside_callback(
     Output('mc-progress-bar', 'label'),
     Output('mc-progress-label', 'children'),
     Output('mc-progress-eta', 'children'),
+    Output('traj-progress-container', 'style'),
+    Output('traj-progress-bar', 'value'),
+    Output('traj-progress-bar', 'label'),
+    Output('traj-progress-label', 'children'),
+    Output('traj-progress-eta', 'children'),
     Output('mc-progress-interval', 'disabled'),
     Input('mc-progress-interval', 'n_intervals'),
     Input('mc-trigger-store', 'data'),
@@ -1335,16 +1595,41 @@ def update_mc_progress(n_intervals, trigger):
     if ctx.triggered_id == 'mc-trigger-store':
         return (
             {"marginTop": "8px", "display": "block"},
-            0, '0/1000', 'MC Dropout Sampling — starting...', '', False
+            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
+            {"marginTop": "8px", "display": "block"},
+            0, '0/1000', 'Simultaneous uncertainty band — starting...', '',
+            False
         )
     # Polled by interval
     if not mc_progress['running']:
-        return {"marginTop": "8px", "display": "none"}, 0, '', '', '', True  # disable interval
+        # Avoid race condition on update: keep polling briefly after trigger
+        # so progress bar does not disappear before long MC jobs actually start.
+        try:
+            is_recent_trigger = trigger is not None and (time.time() * 1000 - float(trigger) < 15000)
+        except Exception:
+            is_recent_trigger = False
+        if is_recent_trigger:
+            waiting_title = "Simultaneous uncertainty band — preparing..."
+            return (
+                {"marginTop": "8px", "display": "block"}, 0, '0/1000', waiting_title, '',
+                {"marginTop": "8px", "display": "block"}, 0, '0/1000', waiting_title, '',
+                False
+            )
+        return (
+            {"marginTop": "8px", "display": "none"}, 0, '', '', '',
+            {"marginTop": "8px", "display": "none"}, 0, '', '', '',
+            True
+        )  # disable interval
     pct = int(mc_progress['current'] / mc_progress['total'] * 100) if mc_progress['total'] > 0 else 0
     label_text = f"{mc_progress['current']}/{mc_progress['total']}"
-    title = f"MC Dropout Sampling — {mc_progress['label']}" if mc_progress['label'] else "MC Dropout Sampling"
+    title = f"Simultaneous uncertainty band — {mc_progress['label']}" if mc_progress['label'] else "Simultaneous uncertainty band"
     eta = f"ETA: {mc_progress['eta']}" if mc_progress['eta'] else ''
     return (
+        {"marginTop": "8px", "display": "block"},
+        pct,
+        label_text,
+        title,
+        eta,
         {"marginTop": "8px", "display": "block"},
         pct,
         label_text,
@@ -1555,13 +1840,23 @@ def toggle_slider_visibility(calib_data, interval_method, active_cell, n_clicks,
         return {"display": "none"}
     if update_ran:
         return {"display": "none"}
-    if interval_method != 'conformal':
+    if interval_method not in ['conformal', 'mc']:
         return {"display": "none"}
     # Show if calibration loaded and there's any prediction result
     has_result = active_cell is not None or memory_predictions is not None
-    if calib_data is not None and has_result:
-        return {"display": "block", "marginTop": "20px",
-                "background": "#eef6ff", "borderRadius": "10px", "padding": "16px"}
+    if interval_method == 'conformal' and calib_data is None:
+        return {"display": "none"}
+    if has_result:
+        return {
+            "display": "block",
+            "marginTop": "10px",
+            "marginBottom": "16px",
+            "background": "#eef6ff",
+            "borderRadius": "10px",
+            "padding": "10px 12px",
+            "border": "1px solid rgba(198,218,242,.95)",
+            "boxShadow": "0 6px 18px rgba(20,66,114,.06)",
+        }
     return {"display": "none"}
 
 @app.callback(
@@ -1611,7 +1906,8 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
         for row in memory['pred_df']
     ])
 
-    y = mortality[i,:10]
+    display_horizon = DEFAULT_MORTALITY_DISPLAY_HORIZON
+    y = mortality[i, :display_horizon]
     x = list(range(1, len(y)+1))
 
     fig = go.Figure()
@@ -1643,7 +1939,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
             E_train=Event_status_calibration,
             T_train=Event_time_calibration,
             X_and_mask_test=X_and_mask_test,
-            max_horizon=10,
+            max_horizon=display_horizon,
             alpha=alpha_value
         )
         lower = result['corrected_lower_bounds']
@@ -1662,20 +1958,26 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
                 showlegend=True,
                 name=f"{int((1 - alpha_value) * 100)}% Conformal Interval"
             ),
-            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False,name='Upper Bound'),
-            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False,name='Lower Bound')
+            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
+            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
         ])
 
     elif plot_mc:
         df_scaled = pd.DataFrame(memory['scaled_df'])
         mask_df = pd.DataFrame(memory['mask'], dtype='float32')
-        # Only compute MC dropout for the single selected patient
+        # Only compute simultaneous uncertainty band for the selected patient
         single_input = paddle.to_tensor(df_scaled.values[i:i+1].astype('float32'))
         single_mask = paddle.to_tensor(mask_df.values[i:i+1].astype('float32'))
-        mc_lo, mc_hi, mc_mean = mc_dropout_predict(model_copy, single_input, single_mask, label='Mortality Curve')
-        lower = np.clip(mc_lo[0, :10], 0, 1).tolist()
-        upper = np.clip(mc_hi[0, :10], 0, 1).tolist()
-        mc_mean_vals = mc_mean[0, :10].tolist()
+        mc_lo, mc_hi, mc_mean = mc_dropout_predict(
+            model_copy,
+            single_input,
+            single_mask,
+            alpha=alpha_value,
+            label='Mortality Curve'
+        )
+        lower = np.clip(mc_lo[0, :display_horizon], 0, 1).tolist()
+        upper = np.clip(mc_hi[0, :display_horizon], 0, 1).tolist()
+        mc_mean_vals = mc_mean[0, :display_horizon].tolist()
         has_interval = True
 
         fig.add_traces([
@@ -1687,15 +1989,24 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f'MC Dropout {int((1-alpha_value)*100)}% Interval'
+                name=f'Simultaneous uncertainty band {int((1-alpha_value)*100)}%'
             ),
-            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, name='MC Upper'),
-            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, name='MC Lower'),
-            go.Scatter(x=x, y=mc_mean_vals, mode='lines+markers', name='MC Mean',
+            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, hoverinfo='skip', name='Band Upper'),
+            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(40, 167, 69, 0.4)'), mode='lines', showlegend=False, hoverinfo='skip', name='Band Lower'),
+            go.Scatter(x=x, y=mc_mean_vals, mode='lines+markers', name='Band Mean',
                        line=dict(color='rgba(40, 167, 69, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(40, 167, 69, 0.8)'),
                        visible='legendonly')
         ])
+
+    if lower is not None and upper is not None:
+        fig.data[0].customdata = np.column_stack([
+            np.asarray(lower, dtype=np.float64),
+            np.asarray(upper, dtype=np.float64)
+        ])
+        fig.data[0].hovertemplate = "%{y:.2f} [%{customdata[0]:.2f}, %{customdata[1]:.2f}]<extra>%{fullData.name}</extra>"
+    else:
+        fig.data[0].hovertemplate = "%{y:.2f}<extra>%{fullData.name}</extra>"
 
     fig.update_layout(
         title=dict(text=f'Cumulative Mortality Risk — Patient {i + 1}',
@@ -1710,10 +2021,11 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
-                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1),
+                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1,
+                    font=dict(size=10), itemsizing="constant"),
         margin=dict(t=60, b=95, l=60, r=20),
         hovermode="x unified",
-        height=185 if (window_width is not None and window_width < 768) else 300,
+        height=240 if (window_width is not None and window_width < 768) else 360,
     )
     kpi_cards = create_kpi_cards(y, lower, upper)
     return [kpi_cards, dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()], y.tolist(), {'lower_bounds': lower, 'upper_bounds': upper} if has_interval else None
@@ -1738,11 +2050,13 @@ def control_interval_visibility(alpha_value, memory_calibration, active_cell):
 @app.callback(
     Output('trajectory-plot', 'children'),
     Input('x-table', 'active_cell'),
+    Input('alpha-slider', 'value'),
     State('memory-predictions', 'data'),
     State('window-width-store', 'data'),
+    State('interval-method-selector', 'value'),
     prevent_initial_call=True
 )
-def plot_trajectory(active_cell, memory, window_width):
+def plot_trajectory(active_cell, alpha_value, memory, window_width, interval_method):
     if not active_cell or not memory:
         raise dash.exceptions.PreventUpdate
 
@@ -1750,7 +2064,32 @@ def plot_trajectory(active_cell, memory, window_width):
     coefficients_data = memory['coefficients']
     coeffcients = [paddle.to_tensor(np.array(c), dtype='float32') for c in coefficients_data]
 
-    fig = create_trajectory_plot(i, coeffcients, window_width=window_width)
+    original_band = None
+    alpha_value = 0.05 if alpha_value is None else float(alpha_value)
+    alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
+    if (interval_method or 'mc') == 'mc':
+        df_scaled = pd.DataFrame(memory['scaled_df'])
+        mask_df = pd.DataFrame(memory['mask'], dtype='float32')
+        single_input = paddle.to_tensor(df_scaled.values[i:i+1].astype('float32'))
+        single_mask = paddle.to_tensor(mask_df.values[i:i+1].astype('float32'))
+        lo_t, up_t, _ = mc_dropout_trajectory_band(
+            model_copy,
+            single_input,
+            single_mask,
+            person_id=i,
+            alpha=alpha_value,
+            n_samples=1000,
+            label='Trajectory (original)',
+        )
+        original_band = {'lower': lo_t, 'upper': up_t}
+
+    fig = create_trajectory_plot(
+        i,
+        coeffcients,
+        window_width=window_width,
+        original_band=original_band,
+        alpha=alpha_value,
+    )
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()]
 
 @app.callback(
@@ -1868,10 +2207,21 @@ def toggle_offcanvas(open_clicks, update_clicks, is_open):
     State('update-ran', 'data'),
 )
 def toggle_slider_visibility_updated(n_clicks, calib_data, interval_method, index, update_ran):
-    if interval_method != 'conformal':
+    if interval_method not in ['conformal', 'mc']:
         return {"display": "none"}
-    if calib_data is not None and index is not None and (n_clicks is not None or update_ran):
-        return {"display": "block", "marginTop": "20px"}
+    if interval_method == 'conformal' and calib_data is None:
+        return {"display": "none"}
+    if index is not None and update_ran:
+        return {
+            "display": "block",
+            "marginTop": "8px",
+            "marginBottom": "16px",
+            "background": "linear-gradient(180deg, #fff8f8 0%, #fff0f0 100%)",
+            "borderRadius": "12px",
+            "padding": "10px 12px",
+            "border": "1px solid rgba(244,210,210,.95)",
+            "boxShadow": "0 6px 18px rgba(122,40,40,.05)",
+        }
     return {"display": "none"}
 
 
@@ -1918,8 +2268,9 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
     coefficients_np = [c.numpy().tolist() for c in coefficients]
 
 
-    y = mortality[0,:10]
-    y_current = np.array(current_mortality)
+    display_horizon = DEFAULT_MORTALITY_DISPLAY_HORIZON
+    y = mortality[0, :display_horizon]
+    y_current = np.array(current_mortality)[:display_horizon]
     
     x = list(range(1, len(y)+1))
 
@@ -1934,6 +2285,11 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         line=dict(color="#C8102E", width=2.5),
         marker=dict(size=7, color="#C8102E", line=dict(color="white", width=1.5))
     ))
+
+    orig_lower = None
+    orig_upper = None
+    upd_lower = None
+    upd_upper = None
     
     if plot_interval:
         data_calibration_scaled_with_mask = np.asarray(memory_calibration['data_calibration_scaled_with_mask'], dtype=np.float32)
@@ -1950,7 +2306,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
             E_train=Event_status_calibration,
             T_train=Event_time_calibration,
             X_and_mask_test=X_and_mask_test,
-            max_horizon=10,
+            max_horizon=display_horizon,
             alpha=alpha_value
         )
         lower_update = result['corrected_lower_bounds']
@@ -1967,11 +2323,15 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
             E_train=Event_status_calibration,
             T_train=Event_time_calibration,
             X_and_mask_test=X_and_mask_test_current,
-            max_horizon=10,
+            max_horizon=display_horizon,
             alpha=alpha_value
         )
         lower = result_current['corrected_lower_bounds']
         upper = result_current['corrected_upper_bounds']
+        orig_lower = lower
+        orig_upper = upper
+        upd_lower = lower_update
+        upd_upper = upper_update
 
         fig.add_traces([
             go.Scatter(
@@ -1984,8 +2344,8 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 showlegend=True,
                 name=f"Original {int((1 - alpha_value) * 100)}% Interval"
             ),
-            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False,name='Upper Bound'),
-            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False,name='Lower Bound')
+            go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
+            go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
         ])
         # Add shaded confidence interval
         fig.add_traces([
@@ -1999,21 +2359,21 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 showlegend=True,
                 name=f"Updated {int((1 - alpha_value) * 100)}% Interval"
             ),
-            go.Scatter(x=x, y=upper_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False,name='Upper Bound'),
-            go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False,name='Lower Bound')
+            go.Scatter(x=x, y=upper_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
+            go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
         ])
 
     elif plot_mc:
-        # MC Dropout intervals for original patient
+        # Simultaneous uncertainty band for original patient
         df_scaled = pd.DataFrame(memory_current['scaled_df'])
         mask_orig = pd.DataFrame(memory_current['mask'], dtype='float32')
         i = index
         orig_input = paddle.to_tensor(df_scaled.values[i:i+1].astype('float32'))
         orig_mask = paddle.to_tensor(mask_orig.values[i:i+1].astype('float32'))
         lower_orig, upper_orig, mc_mean_orig = mc_dropout_predict(model_copy, orig_input, orig_mask, alpha=alpha_value, label='Original Patient')
-        lower_orig = lower_orig[0, :10]
-        upper_orig = upper_orig[0, :10]
-        mc_mean_orig = mc_mean_orig[0, :10]
+        lower_orig = lower_orig[0, :display_horizon]
+        upper_orig = upper_orig[0, :display_horizon]
+        mc_mean_orig = mc_mean_orig[0, :display_horizon]
 
         fig.add_traces([
             go.Scatter(
@@ -2024,21 +2384,21 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Original MC {int((1 - alpha_value) * 100)}% Interval"
+                name=f"Original simultaneous uncertainty band {int((1 - alpha_value) * 100)}%"
             ),
-            go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, name='Upper Bound'),
-            go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, name='Lower Bound'),
-            go.Scatter(x=x, y=mc_mean_orig.tolist(), mode='lines+markers', name='Original MC Mean',
+            go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
+            go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
+            go.Scatter(x=x, y=mc_mean_orig.tolist(), mode='lines+markers', name='Original band mean',
                        line=dict(color='rgba(0, 123, 255, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(0, 123, 255, 0.8)'),
                        visible='legendonly')
         ])
 
-        # MC Dropout intervals for updated patient
+        # Simultaneous uncertainty band for updated patient
         lower_upd, upper_upd, mc_mean_upd = mc_dropout_predict(model_copy, input_tensor, mask_tensor, alpha=alpha_value, label='Updated Patient')
-        lower_upd = lower_upd[0, :10]
-        upper_upd = upper_upd[0, :10]
-        mc_mean_upd = mc_mean_upd[0, :10]
+        lower_upd = lower_upd[0, :display_horizon]
+        upper_upd = upper_upd[0, :display_horizon]
+        mc_mean_upd = mc_mean_upd[0, :display_horizon]
 
         fig.add_traces([
             go.Scatter(
@@ -2049,18 +2409,41 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Updated MC {int((1 - alpha_value) * 100)}% Interval"
+                name=f"Updated simultaneous uncertainty band {int((1 - alpha_value) * 100)}%"
             ),
-            go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, name='Upper Bound'),
-            go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, name='Lower Bound'),
-            go.Scatter(x=x, y=mc_mean_upd.tolist(), mode='lines+markers', name='Updated MC Mean',
+            go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
+            go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
+            go.Scatter(x=x, y=mc_mean_upd.tolist(), mode='lines+markers', name='Updated band mean',
                        line=dict(color='rgba(255, 0, 0, 0.8)', width=2, dash='dot'),
                        marker=dict(size=5, color='rgba(255, 0, 0, 0.8)'),
                        visible='legendonly')
         ])
 
+        orig_lower = lower_orig.tolist()
+        orig_upper = upper_orig.tolist()
+        upd_lower = lower_upd.tolist()
+        upd_upper = upper_upd.tolist()
+
+    if orig_lower is not None and orig_upper is not None:
+        fig.data[0].customdata = np.column_stack([
+            np.asarray(orig_lower, dtype=np.float64),
+            np.asarray(orig_upper, dtype=np.float64)
+        ])
+        fig.data[0].hovertemplate = "%{y:.2f} [%{customdata[0]:.2f}, %{customdata[1]:.2f}]<extra>%{fullData.name}</extra>"
+    else:
+        fig.data[0].hovertemplate = "%{y:.2f}<extra>%{fullData.name}</extra>"
+
+    if upd_lower is not None and upd_upper is not None:
+        fig.data[1].customdata = np.column_stack([
+            np.asarray(upd_lower, dtype=np.float64),
+            np.asarray(upd_upper, dtype=np.float64)
+        ])
+        fig.data[1].hovertemplate = "%{y:.2f} [%{customdata[0]:.2f}, %{customdata[1]:.2f}]<extra>%{fullData.name}</extra>"
+    else:
+        fig.data[1].hovertemplate = "%{y:.2f}<extra>%{fullData.name}</extra>"
+
     # 手机端高度调整（进一步缩小）
-    mobile_height = 185 if (window_width is not None and window_width < 768) else 300
+    mobile_height = 240 if (window_width is not None and window_width < 768) else 360
 
     fig.update_layout(
         title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
@@ -2075,7 +2458,8 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="top", y=-0.18, xanchor="left", x=0,
-                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1),
+                    bgcolor="rgba(255,255,255,0.88)", bordercolor="#dee2e6", borderwidth=1,
+                    font=dict(size=10), itemsizing="constant"),
         margin=dict(t=60, b=95, l=60, r=20),
         hovermode="x unified",
         height=mobile_height
@@ -2111,12 +2495,15 @@ def control_interval_visibility_updated(alpha_value, memory_calibration, n_click
 @app.callback(
     Output('trajectory-plot-updated', 'children'),
     Input('Current-coefficients', 'data'),
+    Input('alpha-slider-updated', 'value'),
     State('memory-predictions', 'data'),
     State('current-patient-index', 'data'),
     State('window-width-store', 'data'),
+    State('interval-method-selector', 'value'),
+    State('editable-table', 'data'),
     prevent_initial_call=True
 )
-def update_plot_trajectory(memory_coefficients, memory, index, window_width):
+def update_plot_trajectory(memory_coefficients, alpha_value, memory, index, window_width, interval_method, edited_data):
     if memory_coefficients is None or index is None:
         raise dash.exceptions.PreventUpdate
     coefficients_data = memory['coefficients']
@@ -2125,7 +2512,56 @@ def update_plot_trajectory(memory_coefficients, memory, index, window_width):
     updated_coeffcients_data = memory_coefficients['coefficients']
     updated_coeffcients = [paddle.to_tensor(np.array(c), dtype='float32') for c in updated_coeffcients_data]
 
-    fig = create_trajectory_plot(index, coeffcients, updated_coeffcients=updated_coeffcients, window_width=window_width)
+    original_band = None
+    updated_band = None
+    alpha_value = 0.05 if alpha_value is None else float(alpha_value)
+    alpha_value = float(np.clip(alpha_value, 0.01, 0.5))
+
+    if (interval_method or 'mc') == 'mc':
+        df_scaled = pd.DataFrame(memory['scaled_df'])
+        mask_df = pd.DataFrame(memory['mask'], dtype='float32')
+        orig_input = paddle.to_tensor(df_scaled.values[index:index+1].astype('float32'))
+        orig_mask = paddle.to_tensor(mask_df.values[index:index+1].astype('float32'))
+        lo_o, up_o, _ = mc_dropout_trajectory_band(
+            model_copy,
+            orig_input,
+            orig_mask,
+            person_id=index,
+            alpha=alpha_value,
+            n_samples=1000,
+            label='Trajectory (original)',
+        )
+        original_band = {'lower': lo_o, 'upper': up_o}
+
+        if edited_data:
+            df_raw = pd.DataFrame(edited_data)
+            df_raw = df_raw.apply(pd.to_numeric, errors='coerce')
+            df_raw_feature = df_raw.iloc[:, :68]
+            mask_upd = ~np.isnan(df_raw_feature)
+            df_raw_feature_scaled = (df_raw_feature - x_mean) / x_std
+            df_raw_feature_scaled = df_raw_feature_scaled.fillna(0)
+            upd_input = paddle.to_tensor(df_raw_feature_scaled.values.astype('float32'))
+            upd_mask = paddle.to_tensor(mask_upd.to_numpy().astype('float32'))
+            lo_u, up_u, _ = mc_dropout_trajectory_band(
+                model_copy,
+                upd_input,
+                upd_mask,
+                person_id=index,
+                alpha=alpha_value,
+                n_samples=1000,
+                label='Trajectory (updated)',
+            )
+            updated_band = {'lower': lo_u, 'upper': up_u}
+
+    fig = create_trajectory_plot(
+        index,
+        coeffcients,
+        updated_coeffcients=updated_coeffcients,
+        window_width=window_width,
+        original_band=original_band,
+        updated_band=updated_band,
+        alpha=alpha_value,
+    )
     return [dcc.Graph(figure=fig, config={'displayModeBar': False}), html.Hr()]
 
 @app.callback(
@@ -2274,6 +2710,22 @@ def toggle_original_plots(n_clicks, active_cell):
     if ctx.triggered_id == 'update-shap-button' and n_clicks:
         return {"display": "none"}, {"display": "none"}
     return {"display": "block"}, {"display": "block"}
+
+
+# ── Hide stale updated plots when selecting a different patient ─────────────
+@app.callback(
+    Output('mortality-plot-updated', 'style'),
+    Output('trajectory-plot-updated', 'style'),
+    Output('shap-plot-updated', 'style'),
+    Input('update-shap-button', 'n_clicks'),
+    Input('x-table', 'active_cell'),
+    prevent_initial_call=True
+)
+def toggle_updated_plots_visibility(n_clicks, active_cell):
+    from dash import ctx
+    if ctx.triggered_id == 'update-shap-button' and n_clicks:
+        return {"display": "block"}, {"display": "block"}, {"display": "block"}
+    return {"display": "none"}, {"display": "none"}, {"display": "none"}
 
 
 # ── Feature search: filter editable-table columns by name ────────────────────

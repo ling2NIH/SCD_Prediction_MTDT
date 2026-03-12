@@ -1,5 +1,12 @@
 
 
+----------- v1.3 -----------
+- Powered by Multi-Task DeepHit v2.14.
+- Added and refined simultaneous uncertainty band workflow for mortality and trajectories.
+- Mortality summary cards updated to 3-year / 5-year / 8-year / 10-year risk.
+- Summary cards now show interval bounds in bracket format when available, e.g. `x% [lower%, upper%]`.
+- Mobile header refinement: logo is right-aligned in mobile mode.
+
 ----------- v1.2.2 -----------
 - Powered by Multi-Task DeepHit v2.14.
 - Fixed the issue : ImportError: libgomp.so.1: cannot open shared object file: No such file or directory.
