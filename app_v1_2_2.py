@@ -130,6 +130,14 @@ ALPHA_MARKS_MOBILE = {
     0.5: '50%'
 }
 
+
+def get_mobile_43_height(window_width, min_height=300, max_height=520):
+    """Compute mobile chart height using ~4:3 aspect ratio based on viewport width."""
+    if window_width is None:
+        return 400
+    plot_width = max(float(window_width) - 36.0, 280.0)
+    return int(np.clip(plot_width * 3.0 / 4.0, min_height, max_height))
+
 #######################refine utility functions for the app ###########################
 
 def create_kpi_cards(mortality_values, lower_bounds=None, upper_bounds=None, accent_color="#0067B1"):
@@ -928,8 +936,8 @@ app.index_string = """
 
         .kpi-row { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
         .kpi-card { padding: 10px 12px; }
-        .kpi-label { font-size: 9px; }
-        .kpi-value { font-size: 0.9rem; }
+        .kpi-label { font-size: 8px; }
+        .kpi-value { font-size: 0.8rem; }
 
         /* main panel body padding */
         #main-results-body { padding: 12px !important; }
@@ -1951,7 +1959,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
     yaxis_title_size = 10 if is_mobile else 12
-    mortality_height = 400 if is_mobile else 500
+    mortality_height = get_mobile_43_height(window_width) if is_mobile else 500
 
     fig = go.Figure()
     fig.add_trace(go.Scatter(
@@ -2505,7 +2513,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         fig.data[1].hovertemplate = "%{y:.2f}<extra>%{fullData.name}</extra>"
 
     
-    mobile_height = 400 if is_mobile else 500
+    mobile_height = get_mobile_43_height(window_width) if is_mobile else 500
 
     fig.update_layout(
         title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
@@ -2796,9 +2804,14 @@ def toggle_updated_plots_visibility(n_clicks, active_cell):
     Output('loading-update_trajectory', 'style'),
     Output('loading-update', 'style'),
     Input('update-ran', 'data'),
-    prevent_initial_call=True
+    Input('x-table', 'active_cell'),
+    prevent_initial_call=False
 )
-def toggle_updated_loading_blocks(update_ran):
+def toggle_updated_loading_blocks(update_ran, active_cell):
+    from dash import ctx
+    # Always hide updated spinners when selecting/switching patient rows.
+    if ctx.triggered_id == 'x-table':
+        return {"display": "none"}, {"display": "none"}, {"display": "none"}
     if update_ran:
         return {"display": "block"}, {"display": "block"}, {"display": "block"}
     return {"display": "none"}, {"display": "none"}, {"display": "none"}
