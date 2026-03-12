@@ -1978,7 +1978,6 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
     x = list(range(1, len(y)+1))
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
-    legend_entry_width = 120 if is_mobile else None
     show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     mortality_height = get_mobile_43_height(window_width) if is_mobile else 500
@@ -2098,8 +2097,7 @@ def plot_mortality(active_cell, alpha_value, memory_calibration, interval_method
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
         legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
-                    font=dict(size=legend_font_size), itemsizing="constant",
-                    entrywidth=legend_entry_width, entrywidthmode='pixels'),
+                    font=dict(size=legend_font_size), itemsizing="constant"),
         margin=dict(t=105, b=70, l=margin_left, r=margin_right),
         hovermode="x unified",
         height=mortality_height,
@@ -2382,15 +2380,13 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
         y_current = np.asarray(current_mortality, dtype=np.float64)[:display_horizon]
     is_mobile = window_width is not None and window_width < 768
     legend_font_size = 8 if is_mobile else 10
-    legend_entry_width = 70 if is_mobile else None
     show_mean_legend = not is_mobile
     yaxis_title_size = 10 if is_mobile else 12
     margin_left = 38 if is_mobile else 60
     margin_right = 8 if is_mobile else 20
-    legend_x = 0.0 if is_mobile else 0.5
-    legend_xanchor = 'left' if is_mobile else 'center'
-    orig_curve_name = 'O' if is_mobile else 'Original'
-    upd_curve_name = 'U' if is_mobile else 'Updated'
+    orig_curve_name = 'Original'
+    upd_curve_name = 'Updated'
+    title_y = 0.995 if is_mobile else 0.98
     
     x = list(range(1, len(y)+1))
 
@@ -2462,7 +2458,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Orig int {int((1 - alpha_value) * 100)}%" if not is_mobile else "O int"
+                name=f"Orig int {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower, line=dict(dash='dash', color='rgba(0, 123, 255, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2477,7 +2473,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Upd int {int((1 - alpha_value) * 100)}%" if not is_mobile else "U int"
+                name=f"Upd int {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_update, line=dict(dash='dash', color='rgba(255, 0, 0, 0.2)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound')
@@ -2504,7 +2500,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Orig band {int((1 - alpha_value) * 100)}%" if not is_mobile else "O band"
+                name=f"Orig band {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_orig.tolist(), line=dict(dash='dash', color='rgba(0, 123, 255, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
@@ -2529,7 +2525,7 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                 line=dict(color='rgba(255,255,255,0)'),
                 hoverinfo="skip",
                 showlegend=True,
-                name=f"Upd band {int((1 - alpha_value) * 100)}%" if not is_mobile else "U band"
+                name=f"Upd band {int((1 - alpha_value) * 100)}%"
             ),
             go.Scatter(x=x, y=upper_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Upper Bound'),
             go.Scatter(x=x, y=lower_upd.tolist(), line=dict(dash='dash', color='rgba(255, 0, 0, 0.3)'), mode='lines', showlegend=False, hoverinfo='skip', name='Lower Bound'),
@@ -2567,7 +2563,8 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
 
     fig.update_layout(
         title=dict(text=f'Updated Cumulative Mortality — Modified Patient {index + 1}',
-                   font=dict(size=15, color="#003087", family="Segoe UI, Arial")),
+                   font=dict(size=15, color="#003087", family="Segoe UI, Arial"),
+                   y=title_y, x=0.5, xanchor='center', yanchor='top', pad=dict(t=2, b=0)),
         xaxis_title='Year',
         template='plotly_white',
         xaxis=dict(tickmode='linear', dtick=1, showgrid=True,
@@ -2578,10 +2575,9 @@ def update_mortality(n_clicks, alpha_value, memory_calibration, edited_data, ind
                    tickformat=".0%"),
         plot_bgcolor="rgba(248,251,255,0.9)", paper_bgcolor="white",
         font=dict(family="Segoe UI, Arial, sans-serif", size=12, color="#444"),
-        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor=legend_xanchor, x=legend_x,
+        legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="center", x=0.5,
                     bgcolor="rgba(255,255,255,0.60)", bordercolor="rgba(0,0,0,0)", borderwidth=0,
-                    font=dict(size=legend_font_size), itemsizing="constant",
-                    entrywidth=legend_entry_width, entrywidthmode='pixels'),
+                    font=dict(size=legend_font_size), itemsizing="constant"),
         margin=dict(t=105, b=70, l=margin_left, r=margin_right),
         hovermode="x unified",
         height=mobile_height
@@ -2616,23 +2612,45 @@ def control_interval_visibility_updated(alpha_value, memory_calibration, n_click
 
 @app.callback(
     Output('trajectory-plot-updated', 'children'),
-    Input('Current-coefficients', 'data'),
+    Input('update-shap-button', 'n_clicks'),
     Input('alpha-slider-updated', 'value'),
     State('memory-predictions', 'data'),
     State('current-patient-index', 'data'),
     State('window-width-store', 'data'),
     State('interval-method-selector', 'value'),
     State('editable-table', 'data'),
+    State('update-ran', 'data'),
     prevent_initial_call=True
 )
-def update_plot_trajectory(memory_coefficients, alpha_value, memory, index, window_width, interval_method, edited_data):
-    if memory_coefficients is None or index is None:
+def update_plot_trajectory(n_clicks, alpha_value, memory, index, window_width, interval_method, edited_data, update_ran):
+    from dash import ctx
+
+    trigger = ctx.triggered_id
+    if trigger == 'update-shap-button':
+        if not n_clicks:
+            raise dash.exceptions.PreventUpdate
+    elif trigger == 'alpha-slider-updated':
+        if not update_ran:
+            raise dash.exceptions.PreventUpdate
+    else:
         raise dash.exceptions.PreventUpdate
+
+    if index is None or memory is None or not edited_data:
+        raise dash.exceptions.PreventUpdate
+
     coefficients_data = memory['coefficients']
     coeffcients = [paddle.to_tensor(np.array(c), dtype='float32') for c in coefficients_data]
 
-    updated_coeffcients_data = memory_coefficients['coefficients']
-    updated_coeffcients = [paddle.to_tensor(np.array(c), dtype='float32') for c in updated_coeffcients_data]
+    df_raw = pd.DataFrame(edited_data)
+    df_raw = df_raw.apply(pd.to_numeric, errors='coerce')
+    df_raw_feature = df_raw.iloc[:, :68]
+    mask_upd = ~np.isnan(df_raw_feature)
+    df_raw_feature_scaled = (df_raw_feature - x_mean) / x_std
+    df_raw_feature_scaled = df_raw_feature_scaled.fillna(0)
+    upd_input = paddle.to_tensor(df_raw_feature_scaled.values.astype('float32'))
+    upd_mask = paddle.to_tensor(mask_upd.to_numpy().astype('float32'))
+    _, updated_coefficients_raw = model.predict(upd_input, upd_mask)
+    updated_coeffcients = [paddle.to_tensor(np.array(c.numpy()), dtype='float32') for c in updated_coefficients_raw]
 
     original_band = None
     updated_band = None
@@ -2655,25 +2673,16 @@ def update_plot_trajectory(memory_coefficients, alpha_value, memory, index, wind
         )
         original_band = {'lower': lo_o, 'upper': up_o}
 
-        if edited_data:
-            df_raw = pd.DataFrame(edited_data)
-            df_raw = df_raw.apply(pd.to_numeric, errors='coerce')
-            df_raw_feature = df_raw.iloc[:, :68]
-            mask_upd = ~np.isnan(df_raw_feature)
-            df_raw_feature_scaled = (df_raw_feature - x_mean) / x_std
-            df_raw_feature_scaled = df_raw_feature_scaled.fillna(0)
-            upd_input = paddle.to_tensor(df_raw_feature_scaled.values.astype('float32'))
-            upd_mask = paddle.to_tensor(mask_upd.to_numpy().astype('float32'))
-            lo_u, up_u, _ = mc_dropout_trajectory_band(
-                model_copy,
-                upd_input,
-                upd_mask,
-                person_id=index,
-                alpha=alpha_value,
-                n_samples=1000,
-                label='Trajectory (updated)',
-            )
-            updated_band = {'lower': lo_u, 'upper': up_u}
+        lo_u, up_u, _ = mc_dropout_trajectory_band(
+            model_copy,
+            upd_input,
+            upd_mask,
+            person_id=index,
+            alpha=alpha_value,
+            n_samples=1000,
+            label='Trajectory (updated)',
+        )
+        updated_band = {'lower': lo_u, 'upper': up_u}
 
     fig = create_trajectory_plot(
         index,
